@@ -7,6 +7,8 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
+    domains:
+      - api.the-trapp-house.com
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -42,7 +44,7 @@ services:
         sync: false
 
   - type: web
-    name: the-daily-dose-web
+    name: the-trapp-house-web
     env: node
     plan: starter
     autoDeploy: true
@@ -50,6 +52,9 @@ services:
     buildCommand: npm ci && npm run build
     startCommand: npm run start
     healthCheckPath: /
+    domains:
+      - the-trapp-house.com
+      - www.the-trapp-house.com
     envVars:
       - key: NODE_VERSION
         value: "20"
