@@ -1,0 +1,41 @@
+1️⃣ How to start everything up again (new day reset)
+Step A — Open VS Code
+
+Open your VEHR folder (C:\VEHR) in VS Code.
+
+Step B — Start the backend (Terminal 1)
+
+Open a terminal in VS Code and run:
+
+cd C:\VEHR
+.\.venv\Scripts\activate
+python -m uvicorn app.main:app --reload
+
+
+You should see:
+
+“Uvicorn running on http://127.0.0.1:8000”
+
+You can check:
+
+http://127.0.0.1:8000/docs
+
+Leave this terminal open.
+
+Step C — Start the frontend (Terminal 2)
+
+Open a second terminal in VS Code:
+
+cd C:\VEHR\frontend
+npm run dev
+
+
+You should see:
+
+“Local: http://localhost:3000”
+
+Check:
+
+http://localhost:3000/patients
+
+✅ If you see the patient list, you are 100% back where you left of
