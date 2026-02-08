@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     audit,
     auth,
+    clinical_audit,
     documents,
     encounters,
     forms,
@@ -22,6 +23,7 @@ api_router.include_router(encounters.router)
 api_router.include_router(documents.router)
 api_router.include_router(forms.router)
 api_router.include_router(audit.router)
+api_router.include_router(clinical_audit.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(integrations.router)
 api_router.include_router(health.router)

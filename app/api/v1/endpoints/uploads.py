@@ -4,9 +4,13 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from app.core.deps import get_current_membership, get_current_organization, require_permission
+from app.db.session import get_db
+from app.services.audit import log_event
 from app.services.s3_presign import (
     generate_presigned_get_url,
     generate_presigned_put_url,
@@ -42,14 +46,20 @@ def _sanitize_filename(filename: str) -> str:
     return safe_name[:180]
 
 
-def _build_upload_key(filename: str) -> str:
+def _build_upload_key(filename: str, organization_id: str) -> str:
     now = datetime.now(timezone.utc)
     safe_name = _sanitize_filename(filename)
-    return f"uploads/{now:%Y/%m}/{uuid4()}_{safe_name}"
+    return f"uploads/orgs/{organization_id}/{now:%Y/%m}/{uuid4()}_{safe_name}"
 
 
 @router.post("/uploads/presign", response_model=PresignUploadResponse)
-def create_presigned_upload(payload: PresignUploadRequest) -> PresignUploadResponse:
+def create_presigned_upload(
+    payload: PresignUploadRequest,
+    db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
+    membership=Depends(get_current_membership),
+    _: None = Depends(require_permission("documents:write")),
+) -> PresignUploadResponse:
     try:
         settings = load_presign_s3_settings()
     except ValueError as exc:
@@ -58,7 +68,7 @@ def create_presigned_upload(payload: PresignUploadRequest) -> PresignUploadRespo
             detail=str(exc),
         ) from exc
 
-    key = _build_upload_key(payload.filename)
+    key = _build_upload_key(payload.filename, organization.id)
     client = get_presign_s3_client(settings)
 
     try:
@@ -75,6 +85,15 @@ def create_presigned_upload(payload: PresignUploadRequest) -> PresignUploadRespo
             detail="Failed to generate upload URL",
         ) from exc
 
+    log_event(
+        db,
+        action="create_upload_presign",
+        entity_type="upload",
+        entity_id=key,
+        organization_id=organization.id,
+        actor=membership.user.email,
+    )
+
     return PresignUploadResponse(
         key=key,
         url=url,
@@ -84,11 +103,18 @@ def create_presigned_upload(payload: PresignUploadRequest) -> PresignUploadRespo
 
 
 @router.get("/uploads/{key:path}/download", response_model=PresignDownloadResponse)
-def create_presigned_download(key: str) -> PresignDownloadResponse:
+def create_presigned_download(
+    key: str,
+    db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
+    membership=Depends(get_current_membership),
+    _: None = Depends(require_permission("documents:read")),
+) -> PresignDownloadResponse:
     key = key.lstrip("/")
-    if not key or not key.startswith("uploads/"):
+    required_prefix = f"uploads/orgs/{organization.id}/"
+    if not key or not key.startswith(required_prefix):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_404_NOT_FOUND,
             detail="Invalid key",
         )
 
@@ -114,5 +140,14 @@ def create_presigned_download(key: str) -> PresignDownloadResponse:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to generate download URL",
         ) from exc
+
+    log_event(
+        db,
+        action="create_download_presign",
+        entity_type="upload",
+        entity_id=key,
+        organization_id=organization.id,
+        actor=membership.user.email,
+    )
 
     return PresignDownloadResponse(url=url)

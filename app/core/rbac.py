@@ -12,13 +12,19 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     ROLE_ADMIN: {
         "patients:read",
         "patients:write",
+        "patient:create",
         "encounters:read",
         "encounters:write",
+        "encounter:create",
         "forms:read",
         "forms:write",
+        "forms:manage",
+        "form_submission:create",
         "documents:read",
         "documents:write",
         "audit:read",
+        "clinical_audit:run",
+        "clinical_audit:review",
         "org:manage",
         "users:manage",
         "webhooks:manage",
@@ -29,46 +35,68 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "forms:read",
         "documents:read",
         "audit:read",
+        "clinical_audit:run",
+        "clinical_audit:review",
     },
     ROLE_CLINICIAN: {
         "patients:read",
         "patients:write",
+        "patient:create",
         "encounters:read",
         "encounters:write",
+        "encounter:create",
         "forms:read",
         "forms:write",
+        "forms:manage",
+        "form_submission:create",
         "documents:read",
         "documents:write",
+        "clinical_audit:run",
     },
     ROLE_THERAPIST: {
         "patients:read",
         "patients:write",
+        "patient:create",
         "encounters:read",
         "encounters:write",
+        "encounter:create",
         "forms:read",
         "forms:write",
+        "forms:manage",
+        "form_submission:create",
         "documents:read",
         "documents:write",
+        "clinical_audit:run",
     },
     ROLE_MEDICAL_PROVIDER: {
         "patients:read",
         "patients:write",
+        "patient:create",
         "encounters:read",
         "encounters:write",
+        "encounter:create",
         "forms:read",
         "forms:write",
+        "forms:manage",
+        "form_submission:create",
         "documents:read",
         "documents:write",
+        "clinical_audit:run",
     },
     ROLE_MEDICAL_ASSISTANT: {
         "patients:read",
         "patients:write",
+        "patient:create",
         "encounters:read",
         "encounters:write",
+        "encounter:create",
         "forms:read",
         "forms:write",
+        "forms:manage",
+        "form_submission:create",
         "documents:read",
         "documents:write",
+        "clinical_audit:run",
     },
     ROLE_STAFF: {
         "patients:read",
@@ -89,10 +117,27 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     },
 }
 
+PERMISSION_ALIASES: dict[str, set[str]] = {
+    "patient:create": {"patients:write"},
+    "encounter:create": {"encounters:write"},
+    "forms:manage": {"forms:write"},
+    "form_submission:create": {"forms:write"},
+    "patients:write": {"patient:create"},
+    "encounters:write": {"encounter:create"},
+    "forms:write": {"forms:manage", "form_submission:create"},
+}
+
 
 def is_valid_role(role: str) -> bool:
     return role in ROLE_PERMISSIONS
 
 
 def has_permission(role: str, permission: str) -> bool:
-    return permission in ROLE_PERMISSIONS.get(role, set())
+    granted = ROLE_PERMISSIONS.get(role, set())
+    if permission in granted:
+        return True
+
+    for alias in PERMISSION_ALIASES.get(permission, set()):
+        if alias in granted:
+            return True
+    return False

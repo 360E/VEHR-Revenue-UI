@@ -30,18 +30,65 @@ function getErrorMessage(payload: unknown, fallback: string) {
     return payload;
   }
   if (payload && typeof payload === "object" && "detail" in payload) {
-    const detail = (payload as { detail?: string }).detail;
-    if (detail) {
+    const detail = (payload as { detail?: unknown }).detail;
+    if (typeof detail === "string" && detail.trim().length > 0) {
       return detail;
+    }
+    if (Array.isArray(detail)) {
+      return detail.map((item) => String(item)).join("; ");
+    }
+    if (detail && typeof detail === "object") {
+      if ("message" in detail && typeof (detail as { message?: unknown }).message === "string") {
+        return (detail as { message: string }).message;
+      }
+      if ("errors" in detail && Array.isArray((detail as { errors?: unknown }).errors)) {
+        return (detail as { errors: unknown[] }).errors.map((item) => String(item)).join("; ");
+      }
+      return JSON.stringify(detail);
     }
   }
   return fallback;
 }
 
+function getTokenFromCookie(): string | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  const cookies = document.cookie ? document.cookie.split(";") : [];
+  for (const cookie of cookies) {
+    const [rawKey, ...rawValue] = cookie.trim().split("=");
+    const key = rawKey?.trim();
+    if (!key) continue;
+    if (key === "vehr_access_token" || key === "access_token") {
+      return decodeURIComponent(rawValue.join("="));
+    }
+  }
+  return null;
+}
+
+function getRuntimeToken(): string | undefined {
+  if (typeof window !== "undefined") {
+    const storageToken =
+      window.localStorage.getItem("vehr_access_token") ||
+      window.localStorage.getItem("access_token") ||
+      window.sessionStorage.getItem("vehr_access_token") ||
+      window.sessionStorage.getItem("access_token");
+    if (storageToken) {
+      return storageToken;
+    }
+
+    const cookieToken = getTokenFromCookie();
+    if (cookieToken) {
+      return cookieToken;
+    }
+  }
+  return process.env.NEXT_PUBLIC_API_TOKEN;
+}
+
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = buildUrl(path);
   const headers = new Headers(init.headers);
-  const apiToken = process.env.NEXT_PUBLIC_API_TOKEN;
+  const apiToken = getRuntimeToken();
 
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
@@ -50,7 +97,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     headers.set("Authorization", `Bearer ${apiToken}`);
   }
 
-  const response = await fetch(url, { ...init, headers });
+  const response = await fetch(url, { credentials: "include", ...init, headers });
   const contentType = response.headers.get("content-type") ?? "";
 
   let payload: unknown = null;

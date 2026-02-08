@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.core.time import utc_now
 
 
 class Organization(Base):
@@ -12,7 +13,7 @@ class Organization(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
     patients: Mapped[list["Patient"]] = relationship(
         "Patient",
@@ -50,3 +51,24 @@ class Organization(Base):
         "OrganizationMembership",
         back_populates="organization",
     )
+    clinical_audit_runs: Mapped[list["ClinicalAuditRun"]] = relationship(
+        "ClinicalAuditRun",
+        back_populates="organization",
+    )
+    clinical_audit_findings: Mapped[list["ClinicalAuditFinding"]] = relationship(
+        "ClinicalAuditFinding",
+        back_populates="organization",
+    )
+    review_queue_items: Mapped[list["ReviewQueueItem"]] = relationship(
+        "ReviewQueueItem",
+        back_populates="organization",
+    )
+    review_actions: Mapped[list["ReviewAction"]] = relationship(
+        "ReviewAction",
+        back_populates="organization",
+    )
+    review_evidence_links: Mapped[list["ReviewEvidenceLink"]] = relationship(
+        "ReviewEvidenceLink",
+        back_populates="organization",
+    )
+

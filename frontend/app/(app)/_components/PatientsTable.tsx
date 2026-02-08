@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,6 +33,7 @@ export default function PatientsTable({
   initialPatients,
   initialError = null,
 }: PatientsTableProps) {
+  const router = useRouter();
   const [patients, setPatients] = useState<Patient[]>(initialPatients);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
@@ -50,7 +52,7 @@ export default function PatientsTable({
     setForm({ first_name: "", last_name: "", dob: "" });
   }
 
-  async function loadPatients() {
+  const loadPatients = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
@@ -63,7 +65,14 @@ export default function PatientsTable({
     } finally {
       setIsLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    if (initialPatients.length > 0 || initialError) {
+      return;
+    }
+    loadPatients();
+  }, [initialError, initialPatients.length, loadPatients]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -79,12 +88,13 @@ export default function PatientsTable({
     try {
       setIsSubmitting(true);
       setFormError(null);
-      await apiFetch<Patient>("/api/v1/patients", {
+      const created = await apiFetch<Patient>("/api/v1/patients", {
         method: "POST",
         body: JSON.stringify({ first_name, last_name, dob }),
       });
       closeDialog();
       await loadPatients();
+      router.push(`/patients/${created.id}`);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to create patient");
     } finally {
@@ -193,7 +203,8 @@ export default function PatientsTable({
                 {patients.map((patient) => (
                   <TableRow
                     key={patient.id}
-                    className="border-slate-200/70 hover:bg-slate-50/80"
+                    className="cursor-pointer border-slate-200/70 hover:bg-slate-50/80"
+                    onClick={() => router.push(`/patients/${patient.id}`)}
                   >
                     <TableCell className="px-4 py-2.5 font-medium text-slate-900">
                       {patient.last_name}, {patient.first_name}

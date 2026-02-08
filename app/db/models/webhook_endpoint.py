@@ -5,6 +5,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.core.time import utc_now
 
 
 class WebhookEndpoint(Base):
@@ -20,7 +21,7 @@ class WebhookEndpoint(Base):
     event_types_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     signing_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
     organization: Mapped["Organization"] = relationship(
         "Organization",
@@ -30,3 +31,4 @@ class WebhookEndpoint(Base):
         "WebhookDelivery",
         back_populates="webhook",
     )
+

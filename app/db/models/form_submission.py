@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.core.time import utc_now
 
 
 class FormSubmission(Base):
@@ -29,7 +30,7 @@ class FormSubmission(Base):
     )
     submitted_data_json: Mapped[str] = mapped_column(Text, nullable=False)
     pdf_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
     organization: Mapped["Organization"] = relationship(
         "Organization",
@@ -47,3 +48,4 @@ class FormSubmission(Base):
         "FormTemplate",
         back_populates="submissions",
     )
+

@@ -235,6 +235,7 @@ Create presigned upload URL:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/v1/uploads/presign" ^
+  -H "Authorization: Bearer <token>" ^
   -H "Content-Type: application/json" ^
   -d "{\"filename\":\"intake-form.pdf\",\"content_type\":\"application/pdf\"}"
 ```
@@ -250,5 +251,6 @@ curl -X PUT "<url-from-presign-response>" ^
 Create presigned download URL:
 
 ```bash
-curl "http://127.0.0.1:8000/api/v1/uploads/uploads/2026/02/<uuid>_intake-form.pdf/download"
+curl "http://127.0.0.1:8000/api/v1/uploads/<key-from-presign-response>/download" ^
+  -H "Authorization: Bearer <token>"
 ```

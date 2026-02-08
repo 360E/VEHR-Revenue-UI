@@ -1,11 +1,11 @@
 import json
-from datetime import datetime, timedelta
-
+from datetime import timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models.event_outbox import EventOutbox
 from app.services.webhooks import deliver_event_to_webhooks
+from app.core.time import utc_now
 
 
 def enqueue_event(db: Session, organization_id: str, event_type: str, payload: dict) -> EventOutbox:
@@ -15,8 +15,8 @@ def enqueue_event(db: Session, organization_id: str, event_type: str, payload: d
         payload_json=json.dumps(payload),
         status="pending",
         attempts=0,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=utc_now(),
+        updated_at=utc_now(),
     )
     db.add(event)
     db.commit()
@@ -29,7 +29,7 @@ def dispatch_pending_events(
     limit: int = 25,
     organization_id: str | None = None,
 ) -> dict[str, int]:
-    now = datetime.utcnow()
+    now = utc_now()
     query = select(EventOutbox).where(
         EventOutbox.status.in_(["pending", "retry"]),
         (EventOutbox.next_attempt_at.is_(None) | (EventOutbox.next_attempt_at <= now)),
@@ -66,3 +66,6 @@ def dispatch_pending_events(
         db.commit()
 
     return {"processed": processed, "delivered": delivered, "failed": failed}
+
+
+

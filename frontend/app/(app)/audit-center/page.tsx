@@ -1,7 +1,8 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import MetricCard from "../_components/MetricCard";
 import { apiFetch } from "@/lib/api";
+import MetricCard from "../_components/MetricCard";
+import ClinicalAuditsPanel from "./ClinicalAuditsPanel";
 
 type Aggregate = {
   key: string;
@@ -179,13 +180,15 @@ export default async function AuditCenterPage() {
                 </div>
                 <p className="mt-2 text-sm text-slate-600">{item.description}</p>
                 <p className="mt-2 text-xs text-slate-500">
-                  {new Date(item.sample_time).toLocaleString()} • Events: {item.event_ids.length}
+                  {new Date(item.sample_time).toLocaleString()} | Events: {item.event_ids.length}
                 </p>
               </div>
             ))
           )}
         </CardContent>
       </Card>
+
+      <ClinicalAuditsPanel />
     </div>
   );
 }

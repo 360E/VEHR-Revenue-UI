@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.core.time import utc_now
 
 
 class Document(Base):
@@ -39,7 +40,7 @@ class Document(Base):
     storage_key: Mapped[str] = mapped_column(String(500), nullable=False, unique=True)
     storage_region: Mapped[str | None] = mapped_column(String(50), nullable=True)
     storage_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
     organization: Mapped["Organization"] = relationship(
         "Organization",
@@ -53,3 +54,4 @@ class Document(Base):
         "Encounter",
         back_populates="documents",
     )
+

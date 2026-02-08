@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.core.time import utc_now
 
 
 class WebhookDelivery(Base):
@@ -25,7 +26,7 @@ class WebhookDelivery(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     response_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     response_body: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now)
 
     event: Mapped["EventOutbox"] = relationship(
         "EventOutbox",
@@ -35,3 +36,4 @@ class WebhookDelivery(Base):
         "WebhookEndpoint",
         back_populates="deliveries",
     )
+
