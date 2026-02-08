@@ -199,7 +199,7 @@ export default function Sidebar({ role = null }: SidebarProps) {
     .filter((section) => section.items.length > 0);
 
   return (
-    <aside className="flex h-full flex-col gap-8 rounded-3xl border border-slate-900/70 bg-slate-950 p-6 text-slate-100 shadow-[0_35px_90px_rgba(15,23,42,0.35)] lg:sticky lg:top-6 lg:h-[calc(100vh-3rem)]">
+    <aside className="flex h-full min-h-0 flex-col gap-8 overflow-hidden rounded-3xl border border-slate-900/70 bg-slate-950 p-6 text-slate-100 shadow-[0_35px_90px_rgba(15,23,42,0.35)] lg:sticky lg:top-6 lg:h-[calc(100vh-3rem)]">
       <div className="flex items-center gap-3">
         <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-500/15 text-cyan-200">
           <IconPulse className="h-5 w-5" />
@@ -210,7 +210,7 @@ export default function Sidebar({ role = null }: SidebarProps) {
         </div>
       </div>
 
-      <nav className="space-y-6">
+      <nav className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1">
         {visibleSections.map((section) => (
           <div key={section.label} className="space-y-3">
             <div className="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-500">{section.label}</div>
