@@ -1,4 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -77,95 +80,134 @@ def test_workspace_nodes_support_nested_folders_and_files(tmp_path) -> None:
             organization_id = org.id
 
         with TestClient(app) as client:
-            home = client.get("/api/v1/organization/home", headers=_auth_header(token))
-            assert home.status_code == 200
-            tile_id = home.json()["tiles"][0]["id"]
+            with patch(
+                "app.api.v1.endpoints.organization_home.load_s3_settings",
+                return_value=SimpleNamespace(bucket="test-bucket"),
+            ), patch(
+                "app.api.v1.endpoints.organization_home.get_s3_client",
+                return_value=object(),
+            ), patch(
+                "app.api.v1.endpoints.organization_home.upload_fileobj",
+                return_value=None,
+            ):
+                home = client.get("/api/v1/organization/home", headers=_auth_header(token))
+                assert home.status_code == 200
+                tile_id = home.json()["tiles"][0]["id"]
 
-            folder = client.post(
-                f"/api/v1/organization/tiles/{tile_id}/nodes",
-                json={"node_type": "folder", "name": "Status Reports"},
-                headers=_auth_header(token),
-            )
-            assert folder.status_code == 201
-            folder_id = folder.json()["id"]
+                folder = client.post(
+                    f"/api/v1/organization/tiles/{tile_id}/nodes",
+                    json={"node_type": "folder", "name": "Status Reports"},
+                    headers=_auth_header(token),
+                )
+                assert folder.status_code == 201
+                folder_id = folder.json()["id"]
 
-            file_node = client.post(
-                f"/api/v1/organization/tiles/{tile_id}/nodes",
-                json={
-                    "node_type": "file",
-                    "name": "Team Meeting 2026-02-08.txt",
-                    "content": "Agenda draft",
-                },
-                headers=_auth_header(token),
-            )
-            assert file_node.status_code == 201
-            file_id = file_node.json()["id"]
+                file_node = client.post(
+                    f"/api/v1/organization/tiles/{tile_id}/nodes",
+                    json={
+                        "node_type": "file",
+                        "name": "Team Meeting 2026-02-08.txt",
+                        "content": "Agenda draft",
+                    },
+                    headers=_auth_header(token),
+                )
+                assert file_node.status_code == 201
+                file_id = file_node.json()["id"]
 
-            subfolder = client.post(
-                f"/api/v1/organization/tiles/{tile_id}/nodes",
-                json={
-                    "node_type": "folder",
-                    "name": "Week 1",
-                    "parent_id": folder_id,
-                },
-                headers=_auth_header(token),
-            )
-            assert subfolder.status_code == 201
-            subfolder_id = subfolder.json()["id"]
+                subfolder = client.post(
+                    f"/api/v1/organization/tiles/{tile_id}/nodes",
+                    json={
+                        "node_type": "folder",
+                        "name": "Week 1",
+                        "parent_id": folder_id,
+                    },
+                    headers=_auth_header(token),
+                )
+                assert subfolder.status_code == 201
+                subfolder_id = subfolder.json()["id"]
 
-            root_nodes = client.get(
-                f"/api/v1/organization/tiles/{tile_id}/nodes",
-                headers=_auth_header(token),
-            )
-            assert root_nodes.status_code == 200
-            root_by_id = {row["id"]: row for row in root_nodes.json()}
-            assert root_by_id[folder_id]["node_type"] == "folder"
-            assert root_by_id[file_id]["node_type"] == "file"
+                root_nodes = client.get(
+                    f"/api/v1/organization/tiles/{tile_id}/nodes",
+                    headers=_auth_header(token),
+                )
+                assert root_nodes.status_code == 200
+                root_by_id = {row["id"]: row for row in root_nodes.json()}
+                assert root_by_id[folder_id]["node_type"] == "folder"
+                assert root_by_id[file_id]["node_type"] == "file"
 
-            nested_nodes = client.get(
-                f"/api/v1/organization/tiles/{tile_id}/nodes?parent_id={folder_id}",
-                headers=_auth_header(token),
-            )
-            assert nested_nodes.status_code == 200
-            assert [row["id"] for row in nested_nodes.json()] == [subfolder_id]
+                nested_nodes = client.get(
+                    f"/api/v1/organization/tiles/{tile_id}/nodes?parent_id={folder_id}",
+                    headers=_auth_header(token),
+                )
+                assert nested_nodes.status_code == 200
+                assert [row["id"] for row in nested_nodes.json()] == [subfolder_id]
 
-            update_file = client.patch(
-                f"/api/v1/organization/nodes/{file_id}",
-                json={"name": "Team Meeting Final.txt", "content": "Final notes"},
-                headers=_auth_header(token),
-            )
-            assert update_file.status_code == 200
-            assert update_file.json()["name"] == "Team Meeting Final.txt"
-            assert update_file.json()["content"] == "Final notes"
+                update_file = client.patch(
+                    f"/api/v1/organization/nodes/{file_id}",
+                    json={"name": "Team Meeting Final.txt", "content": "Final notes"},
+                    headers=_auth_header(token),
+                )
+                assert update_file.status_code == 200
+                assert update_file.json()["name"] == "Team Meeting Final.txt"
+                assert update_file.json()["content"] == "Final notes"
 
-            uploaded_asset = client.post(
-                f"/api/v1/organization/tiles/{tile_id}/nodes",
-                json={
-                    "node_type": "file",
-                    "name": "IOP-Checklist.png",
-                    "storage_key": "uploads/orgs/other-org-id/2026/02/checklist.png",
-                    "media_type": "image/png",
-                    "size_bytes": 1024,
-                },
-                headers=_auth_header(token),
-            )
-            assert uploaded_asset.status_code == 400
+                uploaded_asset = client.post(
+                    f"/api/v1/organization/tiles/{tile_id}/nodes",
+                    json={
+                        "node_type": "file",
+                        "name": "IOP-Checklist.png",
+                        "storage_key": "uploads/orgs/other-org-id/2026/02/checklist.png",
+                        "media_type": "image/png",
+                        "size_bytes": 1024,
+                    },
+                    headers=_auth_header(token),
+                )
+                assert uploaded_asset.status_code == 400
 
-            uploaded_asset_ok = client.post(
-                f"/api/v1/organization/tiles/{tile_id}/nodes",
-                json={
-                    "node_type": "file",
-                    "name": "IOP-Checklist.png",
-                    "storage_key": f"uploads/orgs/{organization_id}/2026/02/checklist.png",
-                    "media_type": "image/png",
-                    "size_bytes": 1024,
-                },
-                headers=_auth_header(token),
-            )
-            assert uploaded_asset_ok.status_code == 201
-            assert uploaded_asset_ok.json()["storage_key"] == f"uploads/orgs/{organization_id}/2026/02/checklist.png"
-            assert uploaded_asset_ok.json()["media_type"] == "image/png"
-            assert uploaded_asset_ok.json()["size_bytes"] == 1024
+                uploaded_asset_ok = client.post(
+                    f"/api/v1/organization/tiles/{tile_id}/nodes",
+                    json={
+                        "node_type": "file",
+                        "name": "IOP-Checklist.png",
+                        "storage_key": f"uploads/orgs/{organization_id}/2026/02/checklist.png",
+                        "media_type": "image/png",
+                        "size_bytes": 1024,
+                    },
+                    headers=_auth_header(token),
+                )
+                assert uploaded_asset_ok.status_code == 201
+                assert uploaded_asset_ok.json()["storage_key"] == f"uploads/orgs/{organization_id}/2026/02/checklist.png"
+                assert uploaded_asset_ok.json()["media_type"] == "image/png"
+                assert uploaded_asset_ok.json()["size_bytes"] == 1024
+
+                uploaded_pdf = client.post(
+                    f"/api/v1/organization/tiles/{tile_id}/nodes/upload",
+                    files={"file": ("Status-Report.pdf", b"%PDF-1.4\nfake", "application/pdf")},
+                    data={"parent_id": folder_id},
+                    headers=_auth_header(token),
+                )
+                assert uploaded_pdf.status_code == 201
+                assert uploaded_pdf.json()["node_type"] == "file"
+                assert uploaded_pdf.json()["media_type"] == "application/pdf"
+                assert uploaded_pdf.json()["size_bytes"] > 0
+                assert uploaded_pdf.json()["parent_id"] == folder_id
+                assert uploaded_pdf.json()["storage_key"].startswith(
+                    f"uploads/orgs/{organization_id}/workspace/{tile_id}/"
+                )
+
+                uploaded_png = client.post(
+                    f"/api/v1/organization/tiles/{tile_id}/nodes/upload",
+                    files={"file": ("scan.png", b"png-binary", "image/png")},
+                    data={"existing_node_id": file_id},
+                    headers=_auth_header(token),
+                )
+                assert uploaded_png.status_code == 201
+                assert uploaded_png.json()["id"] == file_id
+                assert uploaded_png.json()["media_type"] == "image/png"
+                assert uploaded_png.json()["storage_key"].startswith(
+                    f"uploads/orgs/{organization_id}/workspace/{tile_id}/"
+                )
+                assert uploaded_png.json()["content"] is None
     finally:
         app.dependency_overrides.clear()
         Base.metadata.drop_all(bind=engine)
@@ -272,6 +314,23 @@ def test_workspace_nodes_enforce_tenant_and_rbac(tmp_path) -> None:
                 headers=_auth_header(admin_b_token),
             )
             assert cross_tenant_update.status_code == 404
+
+            with patch(
+                "app.api.v1.endpoints.organization_home.load_s3_settings",
+                return_value=SimpleNamespace(bucket="test-bucket"),
+            ), patch(
+                "app.api.v1.endpoints.organization_home.get_s3_client",
+                return_value=object(),
+            ), patch(
+                "app.api.v1.endpoints.organization_home.upload_fileobj",
+                return_value=None,
+            ):
+                cross_tenant_upload = client.post(
+                    f"/api/v1/organization/tiles/{default_tile_id}/nodes/upload",
+                    files={"file": ("cross.pdf", b"pdf", "application/pdf")},
+                    headers=_auth_header(admin_b_token),
+                )
+                assert cross_tenant_upload.status_code == 404
     finally:
         app.dependency_overrides.clear()
         Base.metadata.drop_all(bind=engine)

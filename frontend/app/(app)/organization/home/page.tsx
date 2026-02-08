@@ -83,13 +83,6 @@ type OrganizationHomeResponse = {
   announcements: Announcement[];
 };
 
-type PresignUploadResponse = {
-  key: string;
-  url: string;
-  method: string;
-  headers: Record<string, string>;
-};
-
 type PresignDownloadResponse = {
   url: string;
 };
@@ -119,11 +112,6 @@ function formatBytes(size?: number | null): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function guessContentType(file: File): string {
-  if (file.type) return file.type;
-  return "application/octet-stream";
 }
 
 export default function OrganizationHomePage() {
@@ -323,31 +311,14 @@ export default function OrganizationHomePage() {
       setWorkspaceError(null);
       setUploading(true);
       for (const file of list) {
-        const contentType = guessContentType(file);
-        const presign = await apiFetch<PresignUploadResponse>("/api/v1/uploads/presign", {
-          method: "POST",
-          body: JSON.stringify({ filename: file.name, content_type: contentType }),
-        });
-
-        const uploadResponse = await fetch(presign.url, {
-          method: presign.method,
-          headers: presign.headers,
-          body: file,
-        });
-        if (!uploadResponse.ok) {
-          throw new Error(`Upload failed for ${file.name}`);
+        const formData = new FormData();
+        formData.append("file", file);
+        if (currentParentId) {
+          formData.append("parent_id", currentParentId);
         }
-
-        await apiFetch<OrganizationNode>(`/api/v1/organization/tiles/${selectedTileId}/nodes`, {
+        await apiFetch<OrganizationNode>(`/api/v1/organization/tiles/${selectedTileId}/nodes/upload`, {
           method: "POST",
-          body: JSON.stringify({
-            node_type: "file",
-            name: file.name,
-            parent_id: currentParentId,
-            storage_key: presign.key,
-            media_type: contentType,
-            size_bytes: file.size,
-          }),
+          body: formData,
         });
       }
       await loadNodes(selectedTileId, currentParentId);
@@ -391,34 +362,17 @@ export default function OrganizationHomePage() {
   }
 
   async function uploadIntoSelectedFile(file: File) {
-    if (!selectedFile) return;
+    if (!selectedFile || !selectedTileId) return;
     try {
       setWorkspaceError(null);
       setFileUploading(true);
 
-      const contentType = guessContentType(file);
-      const presign = await apiFetch<PresignUploadResponse>("/api/v1/uploads/presign", {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("existing_node_id", selectedFile.id);
+      const updated = await apiFetch<OrganizationNode>(`/api/v1/organization/tiles/${selectedTileId}/nodes/upload`, {
         method: "POST",
-        body: JSON.stringify({ filename: file.name, content_type: contentType }),
-      });
-
-      const uploadResponse = await fetch(presign.url, {
-        method: presign.method,
-        headers: presign.headers,
-        body: file,
-      });
-      if (!uploadResponse.ok) {
-        throw new Error(`Upload failed for ${file.name}`);
-      }
-
-      const updated = await apiFetch<OrganizationNode>(`/api/v1/organization/nodes/${selectedFile.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          name: fileDraftName.trim() || file.name,
-          storage_key: presign.key,
-          media_type: contentType,
-          size_bytes: file.size,
-        }),
+        body: formData,
       });
 
       setSelectedFile(updated);

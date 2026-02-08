@@ -1,7 +1,11 @@
 import json
+import os
+import re
 from datetime import date, timedelta
+from pathlib import Path
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
@@ -25,6 +29,7 @@ from app.db.models.patient_document import PatientDocument
 from app.db.models.patient_service_enrollment import PatientServiceEnrollment
 from app.db.session import get_db
 from app.services.audit import log_event
+from app.services.storage import get_s3_client, load_s3_settings, upload_fileobj
 
 
 router = APIRouter(tags=["Organization"])
@@ -270,6 +275,30 @@ def _validate_storage_key(*, organization_id: str, storage_key: str | None) -> s
             detail="storage_key must belong to current organization upload prefix",
         )
     return key
+
+
+def _sanitize_filename(filename: str) -> str:
+    safe_name = Path(filename).name
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", safe_name)
+    if not safe_name:
+        return "file"
+    return safe_name[:180]
+
+
+def _build_workspace_storage_key(*, organization_id: str, tile_id: str, filename: str) -> str:
+    now = utc_now()
+    safe_name = _sanitize_filename(filename)
+    return f"uploads/orgs/{organization_id}/workspace/{tile_id}/{now:%Y/%m}/{uuid4()}_{safe_name}"
+
+
+def _get_file_size(upload: UploadFile) -> int:
+    try:
+        upload.file.seek(0, os.SEEK_END)
+        size = upload.file.tell()
+        upload.file.seek(0)
+        return int(size)
+    except Exception:
+        return 0
 
 
 def _default_tile_specs() -> list[dict]:
@@ -804,6 +833,117 @@ def create_organization_tile_node(
         actor=membership.user.email,
     )
     return _node_read(row)
+
+
+@router.post(
+    "/organization/tiles/{tile_id}/nodes/upload",
+    response_model=OrganizationTileNodeRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def upload_organization_tile_node_file(
+    tile_id: str,
+    file: UploadFile = File(...),
+    parent_id: str | None = Form(default=None),
+    existing_node_id: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
+    membership=Depends(get_current_membership),
+) -> OrganizationTileNodeRead:
+    _get_tile_with_access(
+        db,
+        organization_id=organization.id,
+        tile_id=tile_id,
+        role=membership.role,
+    )
+
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing filename")
+
+    node: OrganizationTileNode | None = None
+    if existing_node_id is not None:
+        node = db.execute(
+            select(OrganizationTileNode).where(
+                OrganizationTileNode.id == existing_node_id,
+                OrganizationTileNode.organization_id == organization.id,
+                OrganizationTileNode.tile_id == tile_id,
+            )
+        ).scalar_one_or_none()
+        if not node:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+        if node.node_type != "file":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only file nodes can accept uploads")
+    else:
+        parent = _validate_parent_node(
+            db,
+            organization_id=organization.id,
+            tile_id=tile_id,
+            parent_id=parent_id,
+        )
+
+    content_type = (file.content_type or "").strip() or "application/octet-stream"
+    size_bytes = _get_file_size(file)
+    storage_key = _build_workspace_storage_key(
+        organization_id=organization.id,
+        tile_id=tile_id,
+        filename=file.filename,
+    )
+
+    try:
+        settings = load_s3_settings()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+
+    client = get_s3_client(settings)
+    try:
+        upload_fileobj(
+            client=client,
+            bucket=settings.bucket,
+            key=storage_key,
+            fileobj=file.file,
+            content_type=content_type,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Storage upload failed",
+        ) from exc
+
+    if node is None:
+        node = OrganizationTileNode(
+            organization_id=organization.id,
+            tile_id=tile_id,
+            parent_id=parent.id if parent else None,
+            node_type="file",
+            name=file.filename,
+            content=None,
+            storage_key=storage_key,
+            media_type=content_type,
+            size_bytes=size_bytes,
+            sort_order=0,
+            created_by_user_id=membership.user_id,
+        )
+    else:
+        node.storage_key = storage_key
+        node.media_type = content_type
+        node.size_bytes = size_bytes
+        node.content = None
+
+    db.add(node)
+    db.commit()
+    db.refresh(node)
+
+    log_event(
+        db,
+        action="tile_node.uploaded",
+        entity_type="organization_tile_node",
+        entity_id=node.id,
+        organization_id=organization.id,
+        actor=membership.user.email,
+    )
+    return _node_read(node)
 
 
 @router.patch("/organization/nodes/{node_id}", response_model=OrganizationTileNodeRead)

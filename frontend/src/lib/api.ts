@@ -65,7 +65,8 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const headers = new Headers(init.headers);
   const apiToken = getRuntimeToken();
 
-  if (init.body && !headers.has("Content-Type")) {
+  const isFormDataBody = typeof FormData !== "undefined" && init.body instanceof FormData;
+  if (init.body && !headers.has("Content-Type") && !isFormDataBody) {
     headers.set("Content-Type", "application/json");
   }
   if (apiToken && !headers.has("Authorization")) {
