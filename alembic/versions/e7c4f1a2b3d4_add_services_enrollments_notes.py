@@ -29,7 +29,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=200), nullable=False),
         sa.Column("code", sa.String(length=50), nullable=False),
         sa.Column("category", sa.String(length=20), nullable=False),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.CheckConstraint(
@@ -52,7 +52,7 @@ def upgrade() -> None:
         sa.Column("start_date", sa.Date(), nullable=False),
         sa.Column("end_date", sa.Date(), nullable=True),
         sa.Column("assigned_staff_user_id", sa.String(length=36), nullable=True),
-        sa.Column("reporting_enabled", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("reporting_enabled", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.CheckConstraint(
@@ -96,7 +96,7 @@ def upgrade() -> None:
         sa.Column("organization_id", sa.String(length=36), nullable=False),
         sa.Column("patient_id", sa.String(length=36), nullable=False),
         sa.Column("primary_service_id", sa.String(length=36), nullable=False),
-        sa.Column("visibility", sa.String(length=30), nullable=False, server_default="clinical_only"),
+        sa.Column("visibility", sa.String(length=30), nullable=False, server_default=sa.text("'clinical_only'")),
         sa.Column("body", sa.Text(), nullable=False),
         sa.Column("created_by_user_id", sa.String(length=36), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
