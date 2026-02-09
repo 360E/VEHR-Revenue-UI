@@ -29,12 +29,31 @@ type Announcement = {
   created_at: string;
 };
 
+type UserRecord = {
+  id: string;
+  email: string;
+  full_name?: string | null;
+  role: string;
+  is_active: boolean;
+};
+
+type InviteRecord = {
+  id: string;
+  email: string;
+  allowed_roles: string[];
+  status: string;
+  expires_at: string;
+  accepted_at?: string | null;
+};
+
 type TileDraft = {
   title: string;
   category: string;
   href: string;
   required_permissions: string;
 };
+
+const LOW_RISK_ROLES = ["Counselor", "Case Manager"] as const;
 
 function toErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) return error.message;
@@ -48,12 +67,25 @@ function parsePermissionList(input: string) {
     .filter(Boolean);
 }
 
+function formatDateTime(value?: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
+
 export default function OrganizationSettingsPage() {
   const [tiles, setTiles] = useState<OrganizationTile[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [users, setUsers] = useState<UserRecord[]>([]);
+  const [invites, setInvites] = useState<InviteRecord[]>([]);
   const [tileDrafts, setTileDrafts] = useState<Record<string, TileDraft>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [usersSectionError, setUsersSectionError] = useState<string | null>(null);
 
   const [tileForm, setTileForm] = useState({
     title: "",
@@ -73,6 +105,12 @@ export default function OrganizationSettingsPage() {
     is_active: true,
   });
 
+  const [inviteForm, setInviteForm] = useState({
+    email: "",
+    counselor: true,
+    caseManager: true,
+  });
+
   const orderedTileIds = useMemo(
     () => [...tiles].sort((a, b) => a.sort_order - b.sort_order).map((tile) => tile.id),
     [tiles],
@@ -82,11 +120,23 @@ export default function OrganizationSettingsPage() {
     try {
       setLoading(true);
       setError(null);
-      const [tileRes, announcementRes] = await Promise.all([
+      setUsersSectionError(null);
+
+      const [tileResult, announcementResult, usersResult, invitesResult] = await Promise.allSettled([
         apiFetch<OrganizationTile[]>("/api/v1/organization/tiles?include_inactive=true&for_settings=true", { cache: "no-store" }),
         apiFetch<Announcement[]>("/api/v1/organization/announcements?include_inactive=true&for_settings=true", { cache: "no-store" }),
+        apiFetch<UserRecord[]>("/api/v1/users", { cache: "no-store" }),
+        apiFetch<InviteRecord[]>("/api/v1/admin/invites", { cache: "no-store" }),
       ]);
-      const sortedTiles = tileRes.sort((a, b) => a.sort_order - b.sort_order);
+
+      if (tileResult.status === "rejected") {
+        throw tileResult.reason;
+      }
+      if (announcementResult.status === "rejected") {
+        throw announcementResult.reason;
+      }
+
+      const sortedTiles = tileResult.value.sort((a, b) => a.sort_order - b.sort_order);
       setTiles(sortedTiles);
       setTileDrafts(
         Object.fromEntries(
@@ -101,7 +151,21 @@ export default function OrganizationSettingsPage() {
           ]),
         ),
       );
-      setAnnouncements(announcementRes);
+      setAnnouncements(announcementResult.value);
+
+      if (usersResult.status === "fulfilled") {
+        setUsers(usersResult.value);
+      } else {
+        setUsers([]);
+        setUsersSectionError(toErrorMessage(usersResult.reason, "Failed to load users."));
+      }
+
+      if (invitesResult.status === "fulfilled") {
+        setInvites(invitesResult.value);
+      } else {
+        setInvites([]);
+        setUsersSectionError((existing) => existing || toErrorMessage(invitesResult.reason, "Failed to load invites."));
+      }
     } catch (loadError) {
       setError(toErrorMessage(loadError, "Failed to load organization settings"));
     } finally {
@@ -218,17 +282,180 @@ export default function OrganizationSettingsPage() {
     }
   }
 
+  async function createInvite(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      setError(null);
+      setNotice(null);
+      setUsersSectionError(null);
+
+      const allowedRoles = LOW_RISK_ROLES.filter((role) => {
+        if (role === "Counselor") return inviteForm.counselor;
+        return inviteForm.caseManager;
+      });
+
+      if (allowedRoles.length === 0) {
+        setUsersSectionError("Select at least one allowed role for this invite.");
+        return;
+      }
+
+      await apiFetch<InviteRecord>("/api/v1/admin/invites", {
+        method: "POST",
+        body: JSON.stringify({
+          email: inviteForm.email.trim().toLowerCase(),
+          allowed_roles: allowedRoles,
+        }),
+      });
+      setInviteForm({ email: "", counselor: true, caseManager: true });
+      setNotice("Invite sent. The user will receive an email with an acceptance link.");
+      await refresh();
+    } catch (inviteError) {
+      setUsersSectionError(toErrorMessage(inviteError, "Failed to send invite."));
+    }
+  }
+
+  async function resendInvite(inviteId: string) {
+    try {
+      setUsersSectionError(null);
+      setNotice(null);
+      await apiFetch<InviteRecord>(`/api/v1/admin/invites/${inviteId}/resend`, {
+        method: "POST",
+      });
+      setNotice("Invite resent.");
+      await refresh();
+    } catch (resendError) {
+      setUsersSectionError(toErrorMessage(resendError, "Failed to resend invite."));
+    }
+  }
+
+  async function revokeInvite(inviteId: string) {
+    try {
+      setUsersSectionError(null);
+      setNotice(null);
+      await apiFetch<InviteRecord>(`/api/v1/admin/invites/${inviteId}/revoke`, {
+        method: "POST",
+      });
+      setNotice("Invite revoked.");
+      await refresh();
+    } catch (revokeError) {
+      setUsersSectionError(toErrorMessage(revokeError, "Failed to revoke invite."));
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="space-y-2">
         <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-400">Organization</p>
         <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Settings</h1>
-        <p className="text-sm text-slate-500">Manage tiles, permissions, and announcements.</p>
+        <p className="text-sm text-slate-500">Manage users, tiles, permissions, and announcements.</p>
       </div>
 
       {error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
       ) : null}
+
+      {notice ? (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>
+      ) : null}
+
+      <Card className="border-slate-200/70 shadow-sm">
+        <CardHeader className="border-b border-slate-200/70 bg-slate-50/70">
+          <CardTitle className="text-base">Users</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-5">
+          <form className="grid gap-3 lg:grid-cols-2" onSubmit={createInvite}>
+            <Input
+              className="lg:col-span-2"
+              placeholder="Invite email"
+              type="email"
+              value={inviteForm.email}
+              onChange={(event) => setInviteForm((current) => ({ ...current, email: event.target.value }))}
+              required
+            />
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={inviteForm.counselor}
+                onChange={(event) => setInviteForm((current) => ({ ...current, counselor: event.target.checked }))}
+              />
+              Counselor
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={inviteForm.caseManager}
+                onChange={(event) => setInviteForm((current) => ({ ...current, caseManager: event.target.checked }))}
+              />
+              Case Manager
+            </label>
+            <div className="lg:col-span-2">
+              <Button type="submit">Send Invite</Button>
+            </div>
+          </form>
+
+          {usersSectionError ? (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+              {usersSectionError}
+            </div>
+          ) : null}
+
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-900">Organization Users</h3>
+            {loading ? <div className="text-sm text-slate-600">Loading users...</div> : null}
+            {!loading && users.length === 0 ? <div className="text-sm text-slate-600">No users found.</div> : null}
+            {users.map((user) => (
+              <div key={user.id} className="rounded-lg border border-slate-200 p-3 text-sm">
+                <div className="font-semibold text-slate-900">{user.full_name || user.email}</div>
+                <div className="text-slate-600">{user.email}</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {user.role} | {user.is_active ? "active" : "inactive"}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-900">Invites</h3>
+            {!loading && invites.length === 0 ? <div className="text-sm text-slate-600">No invites yet.</div> : null}
+            {invites.map((invite) => (
+              <div key={invite.id} className="rounded-lg border border-slate-200 p-3 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="font-semibold text-slate-900">{invite.email}</div>
+                    <div className="text-xs text-slate-500">
+                      Roles: {invite.allowed_roles.join(", ")} | Status: {invite.status}
+                    </div>
+                    <div className="text-xs text-slate-500">Expires: {formatDateTime(invite.expires_at)}</div>
+                    {invite.accepted_at ? (
+                      <div className="text-xs text-slate-500">Accepted: {formatDateTime(invite.accepted_at)}</div>
+                    ) : null}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => resendInvite(invite.id)}
+                      disabled={invite.status === "accepted" || invite.status === "revoked"}
+                    >
+                      Resend
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => revokeInvite(invite.id)}
+                      disabled={invite.status === "accepted" || invite.status === "revoked"}
+                    >
+                      Revoke
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
 
       <Card className="border-slate-200/70 shadow-sm">
         <CardHeader className="border-b border-slate-200/70 bg-slate-50/70">
