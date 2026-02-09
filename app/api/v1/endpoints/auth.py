@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import os
 import secrets
 from datetime import timedelta
@@ -30,10 +31,11 @@ from app.db.models.patient import Patient
 from app.db.models.user import User
 from app.db.session import get_db
 from app.services.audit import log_event
-from app.services.messaging import send_email
+from app.services.email import EmailDeliveryError, send_email
 
 
 router = APIRouter(tags=["Auth"])
+logger = logging.getLogger(__name__)
 
 INVITE_EXPIRY_HOURS = 72
 PASSWORD_RESET_EXPIRY_MINUTES = 60
@@ -206,29 +208,142 @@ def _to_invite_read(row: Invite) -> InviteRead:
     )
 
 
-def _send_invite_email(*, to_email: str, invite_link: str, allowed_roles: list[str]) -> None:
-    send_email(
-        to_email=to_email,
-        subject="You are invited to VEHR",
-        body=(
-            "You were invited to join VEHR.\n\n"
-            f"Allowed roles: {', '.join(allowed_roles)}\n"
-            f"Accept invite: {invite_link}\n\n"
-            "If you did not expect this email, you can ignore it."
-        ),
+def _send_invite_email(*, to_email: str, invite_link: str) -> bool:
+    body_text = (
+        "You've been invited to join BEHR.\n\n"
+        "Click the link below to accept your invite and set your password:\n\n"
+        f"{invite_link}\n\n"
+        "If you did not expect this invite, you may ignore this email."
+    )
+    body_html = (
+        "<p>You've been invited to join BEHR.</p>"
+        "<p>Click the link below to accept your invite and set your password:</p>"
+        f"<p><a href=\"{invite_link}\">{invite_link}</a></p>"
+        "<p>If you did not expect this invite, you may ignore this email.</p>"
+    )
+    return send_email(
+        to=to_email,
+        subject="You've been invited to BEHR",
+        body_html=body_html,
+        body_text=body_text,
     )
 
 
 def _send_password_reset_email(*, to_email: str, reset_link: str) -> None:
-    send_email(
-        to_email=to_email,
-        subject="VEHR password reset",
-        body=(
-            "We received a request to reset your password.\n\n"
-            f"Reset link: {reset_link}\n\n"
-            "If you did not request this, you can ignore this email."
-        ),
+    body_text = (
+        "We received a request to reset your password.\n\n"
+        f"Reset link: {reset_link}\n\n"
+        "If you did not request this, you can ignore this email."
     )
+    body_html = (
+        "<p>We received a request to reset your password.</p>"
+        f"<p>Reset link: <a href=\"{reset_link}\">{reset_link}</a></p>"
+        "<p>If you did not request this, you can ignore this email.</p>"
+    )
+    try:
+        send_email(
+            to=to_email,
+            subject="VEHR password reset",
+            body_html=body_html,
+            body_text=body_text,
+        )
+    except EmailDeliveryError as exc:
+        logger.error(
+            "Password reset email delivery failed for email=%s error=%s",
+            to_email,
+            str(exc),
+        )
+
+
+def _attempt_invite_email_delivery(
+    *,
+    db: Session,
+    invite: Invite,
+    actor_email: str,
+    invite_link: str,
+    context: str,
+) -> None:
+    log_event(
+        db,
+        action="invite.email_attempted",
+        entity_type="invite",
+        entity_id=invite.id,
+        organization_id=invite.organization_id,
+        actor=actor_email,
+        metadata={"email": invite.email, "context": context},
+    )
+
+    try:
+        sent = _send_invite_email(
+            to_email=invite.email,
+            invite_link=invite_link,
+        )
+        if sent:
+            return
+
+        logger.warning(
+            "Invite email not sent because SMTP configuration is incomplete invite_id=%s email=%s context=%s",
+            invite.id,
+            invite.email,
+            context,
+        )
+        log_event(
+            db,
+            action="invite.email_failed",
+            entity_type="invite",
+            entity_id=invite.id,
+            organization_id=invite.organization_id,
+            actor=actor_email,
+            metadata={
+                "email": invite.email,
+                "context": context,
+                "reason": "smtp_not_configured",
+            },
+        )
+    except EmailDeliveryError as exc:
+        logger.error(
+            "Invite email delivery failed invite_id=%s email=%s context=%s error=%s",
+            invite.id,
+            invite.email,
+            context,
+            str(exc),
+        )
+        log_event(
+            db,
+            action="invite.email_failed",
+            entity_type="invite",
+            entity_id=invite.id,
+            organization_id=invite.organization_id,
+            actor=actor_email,
+            metadata={
+                "email": invite.email,
+                "context": context,
+                "reason": "smtp_error",
+                "error": str(exc),
+            },
+        )
+    except Exception as exc:
+        logger.exception(
+            "Unexpected invite email error invite_id=%s email=%s context=%s error=%s",
+            invite.id,
+            invite.email,
+            context,
+            str(exc),
+        )
+        log_event(
+            db,
+            action="invite.email_failed",
+            entity_type="invite",
+            entity_id=invite.id,
+            organization_id=invite.organization_id,
+            actor=actor_email,
+            metadata={
+                "email": invite.email,
+                "context": context,
+                "reason": "unexpected_error",
+                "error": str(exc),
+            },
+        )
 
 
 @router.post("/auth/bootstrap", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -531,10 +646,12 @@ def create_invite(
     db.commit()
     db.refresh(row)
 
-    _send_invite_email(
-        to_email=email,
+    _attempt_invite_email_delivery(
+        db=db,
+        invite=row,
+        actor_email=membership.user.email,
         invite_link=_build_invite_link(raw_token),
-        allowed_roles=allowed_roles,
+        context="create",
     )
 
     log_event(
@@ -578,11 +695,12 @@ def resend_invite(
     db.commit()
     db.refresh(row)
 
-    allowed_roles = _roles_from_json(row.allowed_roles_json)
-    _send_invite_email(
-        to_email=row.email,
+    _attempt_invite_email_delivery(
+        db=db,
+        invite=row,
+        actor_email=membership.user.email,
         invite_link=_build_invite_link(raw_token),
-        allowed_roles=allowed_roles,
+        context="resend",
     )
 
     log_event(
