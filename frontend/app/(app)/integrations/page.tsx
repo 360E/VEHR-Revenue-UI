@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ExternalLink } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import MetricCard from "../_components/MetricCard";
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 
 type ConnectorCapability = {
   key: string;
@@ -27,9 +29,15 @@ type ConnectorCatalog = {
   connectors: Connector[];
 };
 
+type MicrosoftConnectResponse = {
+  authorization_url: string;
+};
+
 export default function IntegrationsPage() {
   const [catalog, setCatalog] = useState<ConnectorCatalog | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isConnectingMicrosoft, setIsConnectingMicrosoft] = useState(false);
+  const [microsoftConnectError, setMicrosoftConnectError] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -56,6 +64,28 @@ export default function IntegrationsPage() {
 
   const connectors = catalog?.connectors ?? [];
 
+  async function handleConnectMicrosoft() {
+    setMicrosoftConnectError(null);
+    setIsConnectingMicrosoft(true);
+    try {
+      const response = await apiFetch<MicrosoftConnectResponse>(
+        "/api/v1/integrations/microsoft/connect",
+        { cache: "no-store" },
+      );
+      if (!response.authorization_url) {
+        throw new Error("Microsoft authorization URL was not returned.");
+      }
+      window.location.assign(response.authorization_url);
+    } catch (connectError) {
+      if (connectError instanceof ApiError || connectError instanceof Error) {
+        setMicrosoftConnectError(connectError.message || "Unable to start Microsoft connection.");
+      } else {
+        setMicrosoftConnectError("Unable to start Microsoft connection.");
+      }
+      setIsConnectingMicrosoft(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <div className="space-y-2">
@@ -67,6 +97,24 @@ export default function IntegrationsPage() {
           Provider-agnostic connectors for storage, messaging, telephony, accounting, and identity.
         </p>
       </div>
+
+      <Card className="border-slate-200/70 shadow-sm">
+        <CardHeader className="border-b border-slate-200/70 bg-slate-50/70">
+          <CardTitle className="text-base text-slate-900">Microsoft Graph</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 pt-5">
+          <p className="text-sm text-slate-600">
+            Connect Microsoft delegated OAuth for your current organization.
+          </p>
+          <Button type="button" onClick={handleConnectMicrosoft} disabled={isConnectingMicrosoft}>
+            {isConnectingMicrosoft ? "Redirecting..." : "Connect Microsoft"}
+            <ExternalLink className="h-4 w-4" />
+          </Button>
+          {microsoftConnectError ? (
+            <p className="text-sm text-rose-700">{microsoftConnectError}</p>
+          ) : null}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-3">
         <MetricCard label="Connectors" value={`${catalog?.total ?? 0}`} hint="Available adapters" />
