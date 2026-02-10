@@ -140,8 +140,8 @@ def test_microsoft_connect_and_callback_upserts_account(tmp_path, monkeypatch) -
                 headers=_auth_header(token),
                 follow_redirects=False,
             )
-            assert connect_response.status_code == 307
-            authorize_url = connect_response.headers["location"]
+            assert connect_response.status_code == 200
+            authorize_url = connect_response.json()["authorization_url"]
             assert authorize_url.startswith(
                 "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?"
             )

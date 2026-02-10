@@ -9,6 +9,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from jose import JWTError, jwt
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -34,6 +35,10 @@ STATE_TOKEN_TYPE = "microsoft_oauth_state"
 
 class MicrosoftOAuthConfigError(RuntimeError):
     pass
+
+
+class MicrosoftConnectResponse(BaseModel):
+    authorization_url: str
 
 
 def _sanitize_reason(raw_reason: str) -> str:
@@ -246,7 +251,7 @@ def _upsert_integration_account(
 def microsoft_connect(
     membership: OrganizationMembership = Depends(get_current_membership),
     _: None = Depends(require_permission("org:manage")),
-) -> RedirectResponse:
+) -> MicrosoftConnectResponse:
     try:
         settings = _microsoft_oauth_settings()
     except MicrosoftOAuthConfigError as exc:
@@ -273,7 +278,7 @@ def microsoft_connect(
         }
     )
     auth_url = f"{MICROSOFT_AUTHORIZE_URL}?{query}"
-    return RedirectResponse(auth_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+    return MicrosoftConnectResponse(authorization_url=auth_url)
 
 
 @router.get("/integrations/microsoft/callback")
