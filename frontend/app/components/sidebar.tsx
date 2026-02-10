@@ -117,6 +117,16 @@ function IconBuilding({ className }: { className?: string }) {
   );
 }
 
+function IconWindow({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M8 4v5" />
+    </svg>
+  );
+}
+
 function IconSliders({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -199,6 +209,17 @@ const navSections: NavSection[] = [
         description: "Calendars and assignments",
         icon: IconCalendar,
         roles: [ROLE_ADMIN, ROLE_STAFF, ROLE_CLINICIAN, ROLE_THERAPIST, ROLE_PROVIDER, ROLE_ASSISTANT],
+      },
+    ],
+  },
+  {
+    label: "SharePoint",
+    items: [
+      {
+        href: "/sharepoint",
+        label: "SharePoint",
+        description: "Organization SharePoint home",
+        icon: IconWindow,
       },
     ],
   },
