@@ -154,6 +154,21 @@ def test_sharepoint_graph_routes_smoke(tmp_path, monkeypatch) -> None:
                 web_url="https://contoso.sharepoint.com/file",
             )
 
+        def fake_preview_metadata(*, db, organization_id, user_id, drive_id, item_id):  # noqa: ANN001
+            assert organization_id == org_id
+            assert user_id == seeded_user_id
+            assert drive_id == "drive-1"
+            assert item_id == "file-1"
+            return SharePointItem(
+                id="file-1",
+                name="Guide.pdf",
+                is_folder=False,
+                size=1234,
+                web_url="https://contoso.sharepoint.com/file",
+                last_modified="2026-02-10T00:00:00Z",
+                mime_type="application/pdf",
+            )
+
         monkeypatch.setattr(
             "app.api.v1.endpoints.sharepoint_graph.search_sharepoint_sites",
             fake_sites,
@@ -169,6 +184,10 @@ def test_sharepoint_graph_routes_smoke(tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(
             "app.api.v1.endpoints.sharepoint_graph.get_sharepoint_item_download",
             fake_download,
+        )
+        monkeypatch.setattr(
+            "app.api.v1.endpoints.sharepoint_graph.get_sharepoint_item_metadata",
+            fake_preview_metadata,
         )
 
         with TestClient(app) as client:
@@ -201,6 +220,18 @@ def test_sharepoint_graph_routes_smoke(tmp_path, monkeypatch) -> None:
             assert nested_children_response.status_code == 200
             assert nested_children_response.json()[0]["id"] == "file-2"
 
+            preview_response = client.get(
+                "/api/v1/sharepoint/items/file-1/preview",
+                params={"drive_id": "drive-1"},
+                headers=_auth_header(token),
+            )
+            assert preview_response.status_code == 200
+            preview_payload = preview_response.json()
+            assert preview_payload["id"] == "file-1"
+            assert preview_payload["preview_kind"] == "pdf"
+            assert preview_payload["is_previewable"] is True
+            assert "drive_id=drive-1" in preview_payload["download_url"]
+
             download_response = client.get(
                 "/api/v1/sharepoint/drives/drive-1/items/file-1/download",
                 headers=_auth_header(token),
@@ -208,6 +239,14 @@ def test_sharepoint_graph_routes_smoke(tmp_path, monkeypatch) -> None:
             assert download_response.status_code == 200
             assert download_response.content == b"PDFDATA"
             assert "application/pdf" in download_response.headers["content-type"]
+
+            item_download_response = client.get(
+                "/api/v1/sharepoint/items/file-1/download",
+                params={"drive_id": "drive-1"},
+                headers=_auth_header(token),
+            )
+            assert item_download_response.status_code == 200
+            assert item_download_response.content == b"PDFDATA"
     finally:
         app.dependency_overrides.clear()
         Base.metadata.drop_all(bind=engine)

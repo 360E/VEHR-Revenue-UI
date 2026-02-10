@@ -438,6 +438,27 @@ def list_sharepoint_children(
     return items
 
 
+def get_sharepoint_item_metadata(
+    *,
+    db: Session,
+    organization_id: str,
+    user_id: str,
+    drive_id: str,
+    item_id: str,
+) -> SharePointItem:
+    body = _graph_get_json(
+        db=db,
+        organization_id=organization_id,
+        user_id=user_id,
+        path=f"drives/{drive_id}/items/{item_id}",
+        params={"$select": "id,name,size,webUrl,lastModifiedDateTime,file,folder"},
+    )
+    mapped = _map_sharepoint_item(body)
+    if not mapped:
+        raise MicrosoftGraphServiceError("SharePoint item not found", 404)
+    return mapped
+
+
 def _stream_from_url(url: str) -> Iterator[bytes]:
     with httpx.stream("GET", url, timeout=GRAPH_DOWNLOAD_TIMEOUT_SECONDS) as response:
         if response.status_code >= 400:
