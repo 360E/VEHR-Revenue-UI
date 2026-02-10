@@ -88,33 +88,27 @@ export default function IntegrationsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="space-y-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-400">
-          Integration Hub
-        </p>
-        <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Integration Catalog</h1>
-        <p className="text-sm text-slate-500">
-          Provider-agnostic connectors for storage, messaging, telephony, accounting, and identity.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="space-y-2">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-400">
+            Integration Hub
+          </p>
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Integration Catalog</h1>
+          <p className="text-sm text-slate-600">
+            Provider-agnostic connectors for storage, messaging, telephony, accounting, and identity.
+          </p>
+        </div>
+        <Button type="button" onClick={handleConnectMicrosoft} disabled={isConnectingMicrosoft}>
+          {isConnectingMicrosoft ? "Redirecting..." : "Connect Microsoft"}
+          <ExternalLink className="h-4 w-4" />
+        </Button>
       </div>
 
-      <Card className="border-slate-200/70 shadow-sm">
-        <CardHeader className="border-b border-slate-200/70 bg-slate-50/70">
-          <CardTitle className="text-base text-slate-900">Microsoft Graph</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 pt-5">
-          <p className="text-sm text-slate-600">
-            Connect Microsoft delegated OAuth for your current organization.
-          </p>
-          <Button type="button" onClick={handleConnectMicrosoft} disabled={isConnectingMicrosoft}>
-            {isConnectingMicrosoft ? "Redirecting..." : "Connect Microsoft"}
-            <ExternalLink className="h-4 w-4" />
-          </Button>
-          {microsoftConnectError ? (
-            <p className="text-sm text-rose-700">{microsoftConnectError}</p>
-          ) : null}
-        </CardContent>
-      </Card>
+      {microsoftConnectError ? (
+        <Card className="border-rose-200 bg-rose-50/80">
+          <CardContent className="pt-6 text-sm text-rose-700">{microsoftConnectError}</CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-3">
         <MetricCard label="Connectors" value={`${catalog?.total ?? 0}`} hint="Available adapters" />
@@ -168,6 +162,18 @@ export default function IntegrationsPage() {
                   </Badge>
                 ))}
               </div>
+              {connector.key === "sharepoint" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full justify-center"
+                  onClick={handleConnectMicrosoft}
+                  disabled={isConnectingMicrosoft}
+                >
+                  {isConnectingMicrosoft ? "Redirecting..." : "Connect Microsoft"}
+                  <ExternalLink className="h-4 w-4" />
+                </Button>
+              ) : null}
               <div className="space-y-3">
                 {connector.capabilities.map((capability) => (
                   <div key={capability.key} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
