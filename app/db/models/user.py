@@ -26,6 +26,10 @@ class User(Base):
         "Invite",
         back_populates="invited_by_user",
     )
+    integration_accounts: Mapped[list["IntegrationAccount"]] = relationship(
+        "IntegrationAccount",
+        back_populates="user",
+    )
     password_reset_tokens: Mapped[list["PasswordResetToken"]] = relationship(
         "PasswordResetToken",
         back_populates="user",

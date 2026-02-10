@@ -10,6 +10,7 @@ from app.api.v1.endpoints import (
     forms,
     health,
     integrations,
+    integrations_microsoft,
     organization_home,
     organizations,
     paperwork,
@@ -38,6 +39,7 @@ api_router.include_router(audit.router)
 api_router.include_router(clinical_audit.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(integrations.router)
+api_router.include_router(integrations_microsoft.router)
 api_router.include_router(services.router)
 api_router.include_router(sharepoint.router)
 api_router.include_router(health.router)

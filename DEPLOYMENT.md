@@ -40,6 +40,12 @@ alembic upgrade head
 `S3_SECRET_ACCESS_KEY` = secret key  
 `S3_USE_PATH_STYLE` = `true` for MinIO, `false` for AWS  
 `S3_PRESIGN_EXPIRES_SECONDS` = `900` (optional; default 15 minutes)
+`MS_CLIENT_ID` = Microsoft Entra app client ID  
+`MS_CLIENT_SECRET` = Microsoft Entra app client secret  
+`MS_REDIRECT_URI` = `https://api.360-encompass.com/api/v1/integrations/microsoft/callback`  
+`MS_GRAPH_SCOPES` = `openid profile email offline_access User.Read Sites.Read.All Files.ReadWrite.All`  
+`MS_POST_CONNECT_REDIRECT` = `https://360-encompass.com/admin/integrations/microsoft`  
+`INTEGRATION_TOKEN_KEY` = secret used to encrypt refresh tokens at rest  
 
 Notes:
 `AUTO_CREATE_TABLES` stays off so Alembic is the schema source of truth.  
@@ -60,6 +66,12 @@ Render supplies `PORT` automatically for the Docker container.
 3. Confirm `CORS_ALLOWED_ORIGINS` includes the Vercel domain.
 4. Confirm `/health` returns `{"status":"ok"}` on the deployed API.
 5. Bootstrap the first organization/admin via `POST /api/v1/auth/bootstrap`.
+6. Microsoft delegated OAuth checklist:
+   - Confirm all Microsoft env vars above are set in API service config.
+   - Sign in as an org admin and open `/admin/integrations/microsoft` in the frontend.
+   - Click **Connect Microsoft** and complete Microsoft consent.
+   - Confirm redirect returns to `/admin/integrations/microsoft?status=connected`.
+   - Confirm a row exists in `integration_accounts` for `provider='microsoft'` with `revoked_at` null.
 
 Example bootstrap payload:
 ```json

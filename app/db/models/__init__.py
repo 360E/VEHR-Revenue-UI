@@ -9,6 +9,7 @@ from app.db.models.encounter import Encounter  # noqa: F401
 from app.db.models.event_outbox import EventOutbox  # noqa: F401
 from app.db.models.form_submission import FormSubmission  # noqa: F401
 from app.db.models.form_template import FormTemplate  # noqa: F401
+from app.db.models.integration_account import IntegrationAccount  # noqa: F401
 from app.db.models.invite import Invite  # noqa: F401
 from app.db.models.organization import Organization  # noqa: F401
 from app.db.models.organization_membership import OrganizationMembership  # noqa: F401

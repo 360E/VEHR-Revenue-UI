@@ -47,6 +47,10 @@ class Organization(Base):
         "Invite",
         back_populates="organization",
     )
+    integration_accounts: Mapped[list["IntegrationAccount"]] = relationship(
+        "IntegrationAccount",
+        back_populates="organization",
+    )
     webhooks: Mapped[list["WebhookEndpoint"]] = relationship(
         "WebhookEndpoint",
         back_populates="organization",
