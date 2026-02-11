@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import MetricCard from "../_components/MetricCard";
 import { apiFetch } from "@/lib/api";
@@ -10,15 +11,13 @@ type ClientRecord = {
   id: string;
 };
 
-type TaskPriority = "High" | "Medium" | "Low";
-
 type OperationTask = {
   id: string;
   title: string;
   owner: string;
   due: string;
-  priority: TaskPriority;
-  overdue?: boolean;
+  status: "Due Today" | "Overdue" | "Waiting";
+  context: string;
 };
 
 type ActivityItem = {
@@ -27,57 +26,52 @@ type ActivityItem = {
   time: string;
 };
 
-const taskQueue: OperationTask[] = [
+const taskList: OperationTask[] = [
   {
-    id: "task-1",
-    title: "Follow up on incomplete intake packet",
+    id: "op-task-1",
+    title: "Follow up with no-response referral",
     owner: "Admissions",
     due: "Today 10:30 AM",
-    priority: "High",
+    status: "Due Today",
+    context: "Pipeline",
   },
   {
-    id: "task-2",
-    title: "Confirm insurance information for pending referral",
-    owner: "Care Coordination",
+    id: "op-task-2",
+    title: "Confirm intake call time with new client",
+    owner: "Reception",
     due: "Today 1:00 PM",
-    priority: "Medium",
+    status: "Due Today",
+    context: "Calls & Reception",
   },
   {
-    id: "task-3",
-    title: "Return outreach call to family contact",
-    owner: "Client Services",
-    due: "Today 3:15 PM",
-    priority: "Low",
-  },
-  {
-    id: "task-4",
-    title: "Escalate unsigned consent follow-up",
+    id: "op-task-3",
+    title: "Resolve missing consent document",
     owner: "Compliance",
     due: "Yesterday 4:00 PM",
-    priority: "High",
-    overdue: true,
+    status: "Overdue",
+    context: "Documents",
   },
   {
-    id: "task-5",
-    title: "Second follow-up on no-show consultation",
-    owner: "Intake",
-    due: "Yesterday 2:30 PM",
-    priority: "Medium",
-    overdue: true,
+    id: "op-task-4",
+    title: "Await external insurance verification",
+    owner: "Client Services",
+    due: "Waiting",
+    status: "Waiting",
+    context: "Client",
   },
 ];
 
 const recentActivity: ActivityItem[] = [
-  { id: "a1", text: "Referral moved to Intake Scheduled", time: "9:12 AM" },
-  { id: "a2", text: "Client profile updated with contact preference", time: "8:45 AM" },
-  { id: "a3", text: "Document policy acknowledgement completed", time: "Yesterday" },
-  { id: "a4", text: "Follow-up task reassigned to Admissions", time: "Yesterday" },
+  { id: "activity-1", text: "Prospect moved to Intake stage", time: "9:18 AM" },
+  { id: "activity-2", text: "Follow-up task completed by Reception", time: "8:52 AM" },
+  { id: "activity-3", text: "Client document uploaded", time: "Yesterday" },
+  { id: "activity-4", text: "Billing exception reviewed", time: "Yesterday" },
 ];
 
-function taskPriorityClass(priority: TaskPriority): string {
-  if (priority === "High") return "ui-status-error";
-  if (priority === "Medium") return "ui-status-warning";
-  return "ui-status-info";
+function statusClass(status: OperationTask["status"]): string {
+  if (status === "Overdue") return "ui-status-error";
+  if (status === "Waiting") return "ui-status-info";
+  return "ui-status-warning";
 }
 
 export default function DashboardPage() {
@@ -103,53 +97,46 @@ export default function DashboardPage() {
     };
   }, []);
 
-  const tasksDueToday = useMemo(
-    () => taskQueue.filter((task) => !task.overdue).length,
-    [],
-  );
-  const overdueFollowUps = useMemo(
-    () => taskQueue.filter((task) => task.overdue).length,
-    [],
-  );
-  const openReferrals = 12;
+  const tasksDueToday = useMemo(() => taskList.filter((task) => task.status === "Due Today").length, []);
+  const overdueItems = useMemo(() => taskList.filter((task) => task.status === "Overdue").length, []);
+  const openReferrals = 14;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <div className="space-y-3">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-400">
-          {"Encompass 360"}
-        </p>
+        <p className="text-sm font-semibold text-slate-500">Work</p>
         <h1 className="text-[2rem] font-semibold tracking-tight text-slate-900">Operations</h1>
-        <p className="text-sm text-slate-500">
-          Focused CRM operations view for daily execution.
+        <p className="max-w-2xl text-base leading-7 text-slate-600">
+          Start here to focus on what matters today.
         </p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Tasks due today" value={`${tasksDueToday}`} hint="Action queue" />
-        <MetricCard label="Overdue follow-ups" value={`${overdueFollowUps}`} hint="Needs immediate attention" />
-        <MetricCard label="Active clients" value={`${activeClients}`} hint="Current relationship records" />
-        <MetricCard label="Open referrals" value={`${openReferrals}`} hint="Prospects in pipeline" />
+        <MetricCard label="Tasks due today" value={`${tasksDueToday}`} hint="Needs action" />
+        <MetricCard label="Overdue items" value={`${overdueItems}`} hint="Escalate first" />
+        <MetricCard label="Active clients" value={`${activeClients}`} hint="Current relationships" />
+        <MetricCard label="Open referrals" value={`${openReferrals}`} hint="Pipeline in progress" />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1.7fr_1fr]">
+      <div className="grid gap-5 xl:grid-cols-[1.7fr_1fr]">
         <Card className="bg-white shadow-sm">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg text-slate-900">Task List</CardTitle>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-xl text-slate-900">Task list</CardTitle>
+            <Button type="button" className="h-9 rounded-lg px-4">View all tasks</Button>
           </CardHeader>
-          <CardContent className="space-y-3 pt-0">
-            {taskQueue.map((task) => (
+          <CardContent className="space-y-2 pt-0">
+            {taskList.map((task) => (
               <div key={task.id} className="rounded-lg bg-slate-50 px-4 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-semibold text-slate-900">{task.title}</p>
-                  <span className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${taskPriorityClass(task.priority)}`}>
-                    {task.priority}
+                  <span className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${statusClass(task.status)}`}>
+                    {task.status}
                   </span>
                 </div>
                 <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
                   <span>Owner: {task.owner}</span>
                   <span>Due: {task.due}</span>
-                  {task.overdue ? <span className="text-[var(--ui-status-error)]">Overdue</span> : null}
+                  <span>Context: {task.context}</span>
                 </div>
               </div>
             ))}
@@ -157,14 +144,14 @@ export default function DashboardPage() {
         </Card>
 
         <Card className="bg-white shadow-sm">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg text-slate-900">Recent Activity</CardTitle>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xl text-slate-900">Recent activity</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 pt-0">
-            {recentActivity.map((activity) => (
-              <div key={activity.id} className="rounded-lg bg-slate-50 px-3 py-2">
-                <p className="text-sm text-slate-700">{activity.text}</p>
-                <p className="mt-1 text-xs text-slate-500">{activity.time}</p>
+            {recentActivity.map((item) => (
+              <div key={item.id} className="rounded-lg bg-slate-50 px-3 py-2">
+                <p className="text-sm text-slate-700">{item.text}</p>
+                <p className="mt-1 text-xs text-slate-500">{item.time}</p>
               </div>
             ))}
           </CardContent>
