@@ -333,7 +333,8 @@ export default function CopilotDrawer() {
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
         aria-label={isOpen ? "Close Copilot" : "Open Copilot"}
-        className="fixed bottom-6 right-6 z-[80] inline-flex h-14 w-14 items-center justify-center rounded-full bg-slate-900 text-white shadow-lg transition-transform hover:scale-105"
+        data-testid="copilot-trigger"
+        className="fixed bottom-6 right-6 z-[2147483000] inline-flex h-14 min-w-[56px] items-center justify-center gap-1 rounded-full bg-slate-900 px-3 text-white shadow-lg transition-transform hover:scale-105"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="h-6 w-6">
           <path d="M7 8h10" />
@@ -341,10 +342,11 @@ export default function CopilotDrawer() {
           <path d="M7 16h6" />
           <path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-6l-4 3v-3H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" />
         </svg>
+        <span className="text-xs font-semibold">AI</span>
       </button>
 
       <aside
-        className={`fixed right-4 top-4 z-[75] flex h-[calc(100vh-2rem)] w-[min(96vw,860px)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl transition-transform duration-300 ${
+        className={`fixed right-4 top-4 z-[2147482999] flex h-[calc(100vh-2rem)] w-[min(96vw,860px)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl transition-transform duration-300 ${
           isOpen ? "translate-x-0" : "translate-x-[110%]"
         }`}
         aria-hidden={!isOpen}

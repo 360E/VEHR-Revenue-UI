@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { BRANDING } from "@/lib/branding";
+import CopilotDrawer from "./components/copilot-drawer";
 
 const spaceGrotesk = Space_Grotesk({
   variable: "--font-space-grotesk",
@@ -34,6 +35,7 @@ export default function RootLayout({
         className={`${spaceGrotesk.variable} ${jetBrainsMono.variable} antialiased`}
       >
         {children}
+        <CopilotDrawer />
       </body>
     </html>
   );
