@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import csv
 import hashlib
 import hmac
+import io
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode, urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -23,6 +26,7 @@ from app.core.rbac import has_permission_for_organization
 from app.core.security import decode_access_token
 from app.db.models.call_disposition import CallDisposition
 from app.db.models.call_event import CallEvent
+from app.db.models.live_call import LiveCall
 from app.db.models.organization_membership import OrganizationMembership
 from app.db.models.ringcentral_credential import RingCentralCredential
 from app.db.models.ringcentral_event import RingCentralEvent
@@ -56,6 +60,9 @@ router = APIRouter(tags=["RingCentral Live"])
 CALL_OVERLAY_STATUSES = {"NEW", "MISSED", "CALLED_BACK", "RESOLVED"}
 ACTIVE_CALL_STATES = {"ringing", "answered", "connected", "in_progress", "on_call"}
 DEV_ENV_VALUES = {"dev", "development", "local", "test"}
+RESOLVED_OVERLAY_STATUSES = {"CALLED_BACK", "RESOLVED"}
+DEFAULT_CALL_CENTER_TIMEZONE = "America/New_York"
+CALL_CENTER_TIMEZONE_ENV = "CALL_CENTER_TIMEZONE"
 ALLOWED_CALLBACK_HOSTS = {
     "360-encompass.com",
     "www.360-encompass.com",
@@ -109,13 +116,17 @@ class CallCenterPresenceItemRead(BaseModel):
 
 class CallCenterCallRead(BaseModel):
     call_id: str
+    session_id: str | None = None
     state: str
+    missed: bool = False
+    call_date: date | None = None
     disposition: str | None = None
     from_number: str | None = None
     to_number: str | None = None
     direction: str | None = None
     extension_id: str | None = None
     started_at: datetime | None = None
+    answered_at: datetime | None = None
     ended_at: datetime | None = None
     last_event_at: datetime
     overlay_status: str = "NEW"
@@ -158,6 +169,139 @@ class CallDispositionRead(BaseModel):
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _ensure_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _call_center_timezone() -> ZoneInfo | timezone:
+    timezone_name = os.getenv(CALL_CENTER_TIMEZONE_ENV, DEFAULT_CALL_CENTER_TIMEZONE).strip() or DEFAULT_CALL_CENTER_TIMEZONE
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        logger.warning(
+            "call_center_timezone_invalid timezone=%s using=UTC",
+            timezone_name,
+        )
+        return timezone.utc
+
+
+def _to_local_call_date(value: datetime) -> date:
+    return _ensure_utc(value).astimezone(_call_center_timezone()).date()
+
+
+def _today_local_call_date() -> date:
+    return _now_utc().astimezone(_call_center_timezone()).date()
+
+
+def _parse_snapshot_date(raw_value: str | None) -> date:
+    if not raw_value:
+        return _today_local_call_date()
+    try:
+        return date.fromisoformat(raw_value.strip())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="date must be YYYY-MM-DD",
+        ) from exc
+
+
+def _normalize_live_call_state(state: str | None) -> str:
+    normalized = (state or "").strip().lower()
+    if not normalized:
+        return "unknown"
+    if normalized in {"ringing", "proceeding"}:
+        return "ringing"
+    if normalized in {"answered", "connected", "in_progress", "on_call"}:
+        return "answered"
+    if normalized in {"disconnected", "ended", "missed", "noanswer", "no_answer", "busy", "declined", "rejected"}:
+        return "disconnected"
+    return normalized
+
+
+def _resolve_live_call_session_id(*, rc_call_id: str | None, session_id: str | None, rc_event_id: str | None) -> str:
+    return (session_id or rc_call_id or rc_event_id or "").strip()
+
+
+def _upsert_live_call(
+    *,
+    db: Session,
+    organization_id: str,
+    event: Any,
+) -> LiveCall | None:
+    session_key = _resolve_live_call_session_id(
+        rc_call_id=event.rc_call_id,
+        session_id=event.session_id,
+        rc_event_id=event.rc_event_id,
+    )
+    if not session_key:
+        return None
+
+    row = db.execute(
+        select(LiveCall).where(
+            LiveCall.organization_id == organization_id,
+            LiveCall.session_id == session_key,
+        )
+    ).scalar_one_or_none()
+    event_at = _ensure_utc(event.event_time or _now_utc())
+
+    if row is None:
+        started_at = _ensure_utc(event.started_at) if event.started_at else event_at
+        row = LiveCall(
+            organization_id=organization_id,
+            session_id=session_key,
+            rc_call_id=event.rc_call_id,
+            state="unknown",
+            started_at=started_at,
+            last_event_at=event_at,
+            missed=False,
+            call_date=_to_local_call_date(started_at),
+        )
+        db.add(row)
+
+    row.last_event_at = event_at
+    row.rc_call_id = event.rc_call_id or row.rc_call_id
+    row.disposition = event.disposition or row.disposition
+    row.from_number = event.from_number or row.from_number
+    row.to_number = event.to_number or row.to_number
+    row.direction = event.direction or row.direction
+    row.extension_id = event.extension_id or row.extension_id
+
+    if event.started_at:
+        started_at = _ensure_utc(event.started_at)
+        if row.started_at is None or started_at < _ensure_utc(row.started_at):
+            row.started_at = started_at
+    elif row.started_at is None:
+        row.started_at = event_at
+
+    lifecycle_state = _normalize_live_call_state(event.state)
+    if lifecycle_state == "ringing":
+        row.state = "ringing"
+    elif lifecycle_state == "answered":
+        row.state = "answered"
+        if row.answered_at is None:
+            row.answered_at = event_at
+        row.missed = False
+    elif lifecycle_state == "disconnected":
+        row.state = "disconnected"
+        row.ended_at = _ensure_utc(event.ended_at) if event.ended_at else event_at
+        if row.answered_at is None:
+            row.missed = True
+    elif row.state in {"unknown", "ringing"}:
+        row.state = lifecycle_state
+
+    if event.ended_at and row.ended_at is None:
+        row.ended_at = _ensure_utc(event.ended_at)
+    if row.started_at is None:
+        row.started_at = event_at
+
+    row.call_date = _to_local_call_date(row.started_at)
+    row.raw_json = json.dumps(event.raw_payload, default=str)
+    db.add(row)
+    return row
 
 
 def _is_dev_mode() -> bool:
@@ -438,52 +582,69 @@ def _build_call_center_snapshot(
     *,
     db: Session,
     organization_id: str,
+    call_date: date,
+    include_presence: bool,
 ) -> CallCenterSnapshotRead:
-    cutoff = _now_utc() - timedelta(hours=12)
-
-    call_event_rows = db.execute(
-        select(CallEvent)
+    live_call_rows = db.execute(
+        select(LiveCall)
         .where(
-            CallEvent.organization_id == organization_id,
-            CallEvent.type == "call",
-            CallEvent.received_at >= cutoff,
+            LiveCall.organization_id == organization_id,
+            LiveCall.call_date == call_date,
         )
-        .order_by(CallEvent.received_at.desc())
-        .limit(500)
+        .order_by(LiveCall.last_event_at.desc())
+        .limit(1000)
     ).scalars().all()
+    call_ids = sorted(
+        {
+            (row.rc_call_id or row.session_id)
+            for row in live_call_rows
+            if (row.rc_call_id or row.session_id)
+        }
+    )
 
-    disposition_rows = db.execute(
-        select(CallDisposition).where(CallDisposition.organization_id == organization_id)
-    ).scalars().all()
+    disposition_rows: list[CallDisposition] = []
+    if call_ids:
+        disposition_rows = db.execute(
+            select(CallDisposition).where(
+                CallDisposition.organization_id == organization_id,
+                CallDisposition.rc_call_id.in_(call_ids),
+            )
+        ).scalars().all()
     disposition_by_call_id = {row.rc_call_id: row for row in disposition_rows}
 
-    latest_by_call_id: dict[str, CallCenterCallRead] = {}
-    for row in call_event_rows:
-        if not row.rc_call_id:
+    call_log: list[CallCenterCallRead] = []
+    for row in live_call_rows:
+        call_id = row.rc_call_id or row.session_id
+        if not call_id:
             continue
-        if row.rc_call_id in latest_by_call_id:
-            continue
-        payload = _parse_call_event_payload(row.payload_json)
-        disposition = disposition_by_call_id.get(row.rc_call_id)
-        latest_by_call_id[row.rc_call_id] = CallCenterCallRead(
-            call_id=row.rc_call_id,
-            state=str(payload.get("state", "unknown")),
-            disposition=str(payload.get("disposition", "")) or None,
-            from_number=str(payload.get("from_number", "")) or None,
-            to_number=str(payload.get("to_number", "")) or None,
-            direction=str(payload.get("direction", "")) or None,
-            extension_id=str(payload.get("extension_id", "")) or None,
-            started_at=_parse_datetime_safe(payload.get("started_at")),
-            ended_at=_parse_datetime_safe(payload.get("ended_at")),
-            last_event_at=row.received_at if row.received_at.tzinfo else row.received_at.replace(tzinfo=timezone.utc),
-            overlay_status=disposition.status if disposition else "NEW",
-            assigned_to_user_id=disposition.assigned_to_user_id if disposition else None,
-            notes=disposition.notes if disposition else None,
+        disposition_row = disposition_by_call_id.get(call_id)
+        overlay_status = disposition_row.status if disposition_row else ("MISSED" if row.missed else "NEW")
+        call_log.append(
+            CallCenterCallRead(
+                call_id=call_id,
+                session_id=row.session_id,
+                state=(row.state or "unknown").strip().lower(),
+                missed=bool(row.missed),
+                call_date=row.call_date,
+                disposition=row.disposition,
+                from_number=row.from_number,
+                to_number=row.to_number,
+                direction=row.direction,
+                extension_id=row.extension_id,
+                started_at=_ensure_utc(row.started_at) if row.started_at else None,
+                answered_at=_ensure_utc(row.answered_at) if row.answered_at else None,
+                ended_at=_ensure_utc(row.ended_at) if row.ended_at else None,
+                last_event_at=_ensure_utc(row.last_event_at),
+                overlay_status=overlay_status,
+                assigned_to_user_id=disposition_row.assigned_to_user_id if disposition_row else None,
+                notes=disposition_row.notes if disposition_row else None,
+            )
         )
 
     def _call_priority(item: CallCenterCallRead) -> int:
         state = item.state.strip().lower()
-        if item.overlay_status == "MISSED":
+        unresolved_missed = item.missed and item.overlay_status not in RESOLVED_OVERLAY_STATUSES
+        if unresolved_missed:
             return 0
         if state == "ringing":
             return 1
@@ -491,8 +652,7 @@ def _build_call_center_snapshot(
             return 2
         return 3
 
-    call_log = sorted(
-        latest_by_call_id.values(),
+    call_log.sort(
         key=lambda item: (_call_priority(item), -item.last_event_at.timestamp()),
     )
     active_calls = [row for row in call_log if row.state in ACTIVE_CALL_STATES and row.ended_at is None]
@@ -511,73 +671,75 @@ def _build_call_center_snapshot(
         reverse=True,
     )
 
-    membership_rows = db.execute(
-        select(OrganizationMembership, User).where(
-            OrganizationMembership.organization_id == organization_id,
-            OrganizationMembership.user_id == User.id,
-        )
-    ).all()
-    credentials = db.execute(
-        select(RingCentralCredential).where(RingCentralCredential.organization_id == organization_id)
-    ).scalars().all()
-    user_id_by_extension_id = {row.rc_extension_id: row.user_id for row in credentials if row.rc_extension_id}
-
-    presence_event_rows = db.execute(
-        select(CallEvent)
-        .where(
-            CallEvent.organization_id == organization_id,
-            CallEvent.type == "presence",
-            CallEvent.received_at >= cutoff,
-        )
-        .order_by(CallEvent.received_at.desc())
-        .limit(500)
-    ).scalars().all()
-    latest_presence_by_extension: dict[str, tuple[str, datetime]] = {}
-    for row in presence_event_rows:
-        payload = _parse_call_event_payload(row.payload_json)
-        extension_id = str(payload.get("extension_id", "")).strip()
-        if not extension_id or extension_id in latest_presence_by_extension:
-            continue
-        status_value = str(payload.get("status", "")).strip() or "unknown"
-        updated_at = row.received_at if row.received_at.tzinfo else row.received_at.replace(tzinfo=timezone.utc)
-        latest_presence_by_extension[extension_id] = (status_value, updated_at)
-
     presence_items: list[CallCenterPresenceItemRead] = []
-    for membership_row, user_row in membership_rows:
-        if not has_permission_for_organization(
-            db,
-            organization_id=organization_id,
-            role=membership_row.role,
-            permission="calls:read",
-        ):
-            continue
-
-        extension_id = None
-        status_value = "offline" if not user_row.is_active else "available"
-        updated_at = None
-        source = "membership"
-        for ext_id, uid in user_id_by_extension_id.items():
-            if uid == user_row.id:
-                extension_id = ext_id
-                break
-        if extension_id and extension_id in latest_presence_by_extension:
-            status_value, updated_at = latest_presence_by_extension[extension_id]
-            source = "ringcentral_presence"
-
-        presence_items.append(
-            CallCenterPresenceItemRead(
-                user_id=user_row.id,
-                full_name=user_row.full_name,
-                email=user_row.email,
-                role=membership_row.role,
-                extension_id=extension_id,
-                status=status_value,
-                updated_at=updated_at,
-                source=source,
+    if include_presence:
+        cutoff = _now_utc() - timedelta(hours=12)
+        membership_rows = db.execute(
+            select(OrganizationMembership, User).where(
+                OrganizationMembership.organization_id == organization_id,
+                OrganizationMembership.user_id == User.id,
             )
-        )
+        ).all()
+        credentials = db.execute(
+            select(RingCentralCredential).where(RingCentralCredential.organization_id == organization_id)
+        ).scalars().all()
+        user_id_by_extension_id = {row.rc_extension_id: row.user_id for row in credentials if row.rc_extension_id}
 
-    presence_items.sort(key=lambda row: ((row.full_name or "").lower(), row.email.lower()))
+        presence_event_rows = db.execute(
+            select(CallEvent)
+            .where(
+                CallEvent.organization_id == organization_id,
+                CallEvent.type == "presence",
+                CallEvent.received_at >= cutoff,
+            )
+            .order_by(CallEvent.received_at.desc())
+            .limit(500)
+        ).scalars().all()
+        latest_presence_by_extension: dict[str, tuple[str, datetime]] = {}
+        for row in presence_event_rows:
+            payload = _parse_call_event_payload(row.payload_json)
+            extension_id = str(payload.get("extension_id", "")).strip()
+            if not extension_id or extension_id in latest_presence_by_extension:
+                continue
+            status_value = str(payload.get("status", "")).strip() or "unknown"
+            updated_at = row.received_at if row.received_at.tzinfo else row.received_at.replace(tzinfo=timezone.utc)
+            latest_presence_by_extension[extension_id] = (status_value, updated_at)
+
+        for membership_row, user_row in membership_rows:
+            if not has_permission_for_organization(
+                db,
+                organization_id=organization_id,
+                role=membership_row.role,
+                permission="calls:read",
+            ):
+                continue
+
+            extension_id = None
+            status_value = "offline" if not user_row.is_active else "available"
+            updated_at = None
+            source = "membership"
+            for ext_id, uid in user_id_by_extension_id.items():
+                if uid == user_row.id:
+                    extension_id = ext_id
+                    break
+            if extension_id and extension_id in latest_presence_by_extension:
+                status_value, updated_at = latest_presence_by_extension[extension_id]
+                source = "ringcentral_presence"
+
+            presence_items.append(
+                CallCenterPresenceItemRead(
+                    user_id=user_row.id,
+                    full_name=user_row.full_name,
+                    email=user_row.email,
+                    role=membership_row.role,
+                    extension_id=extension_id,
+                    status=status_value,
+                    updated_at=updated_at,
+                    source=source,
+                )
+            )
+        presence_items.sort(key=lambda row: ((row.full_name or "").lower(), row.email.lower()))
+
     return CallCenterSnapshotRead(
         live_calls=call_log,
         dispositions=disposition_items,
@@ -994,11 +1156,18 @@ async def ringcentral_webhook(
     inserted_count = 0
     inserted_rows: list[CallEvent] = []
     legacy_rows: list[RingCentralEvent] = []
+    call_event_push_rows: list[dict[str, Any]] = []
 
     for event in call_events:
+        session_key = _resolve_live_call_session_id(
+            rc_call_id=event.rc_call_id,
+            session_id=event.session_id,
+            rc_event_id=event.rc_event_id,
+        )
+        call_id = (event.rc_call_id or session_key or "").strip() or None
         payload = {
-            "call_id": event.rc_call_id,
-            "session_id": event.session_id,
+            "call_id": call_id,
+            "session_id": session_key or event.session_id,
             "from_number": event.from_number,
             "to_number": event.to_number,
             "direction": event.direction,
@@ -1015,7 +1184,7 @@ async def ringcentral_webhook(
         row = CallEvent(
             organization_id=resolved_org_id,
             type="call",
-            rc_call_id=event.rc_call_id,
+            rc_call_id=call_id,
             payload_json=json.dumps(payload),
         )
         db.add(row)
@@ -1025,8 +1194,8 @@ async def ringcentral_webhook(
             organization_id=resolved_org_id,
             event_type=event.event_filter or "telephony_session",
             rc_event_id=event.rc_event_id,
-            session_id=event.session_id,
-            call_id=event.rc_call_id,
+            session_id=session_key or event.session_id,
+            call_id=call_id,
             from_number=event.from_number,
             to_number=event.to_number,
             direction=event.direction,
@@ -1037,6 +1206,37 @@ async def ringcentral_webhook(
         )
         db.add(legacy)
         legacy_rows.append(legacy)
+
+        live_call = _upsert_live_call(
+            db=db,
+            organization_id=resolved_org_id,
+            event=event,
+        )
+        if live_call:
+            push_call_id = live_call.rc_call_id or live_call.session_id
+            call_event_push_rows.append(
+                {
+                    "event_type": event.event_filter or "telephony_session",
+                    "session_id": live_call.session_id,
+                    "rc_event_id": event.rc_event_id,
+                    "organization_id": resolved_org_id,
+                    "subscription_id": payload_subscription_id,
+                    "received_at": _now_utc().isoformat(),
+                    "event_filter": event.event_filter,
+                    "call_id": push_call_id,
+                    "state": live_call.state,
+                    "disposition": live_call.disposition,
+                    "from_number": live_call.from_number,
+                    "to_number": live_call.to_number,
+                    "direction": live_call.direction,
+                    "extension_id": live_call.extension_id,
+                    "started_at": live_call.started_at.isoformat() if live_call.started_at else None,
+                    "answered_at": live_call.answered_at.isoformat() if live_call.answered_at else None,
+                    "ended_at": live_call.ended_at.isoformat() if live_call.ended_at else None,
+                    "missed": bool(live_call.missed),
+                    "call_date": live_call.call_date.isoformat() if live_call.call_date else None,
+                }
+            )
         inserted_count += 1
 
     for event in presence_events:
@@ -1075,35 +1275,51 @@ async def ringcentral_webhook(
     last_legacy_event_id = legacy_rows[-1].id if legacy_rows else None
     db.commit()
 
-    for event in call_events:
-        disposition_row = db.execute(
+    disposition_by_call_id: dict[str, CallDisposition] = {}
+    disposition_call_ids = sorted(
+        {
+            str(item.get("call_id", "")).strip()
+            for item in call_event_push_rows
+            if str(item.get("call_id", "")).strip()
+        }
+    )
+    if disposition_call_ids:
+        disposition_rows = db.execute(
             select(CallDisposition).where(
                 CallDisposition.organization_id == resolved_org_id,
-                CallDisposition.rc_call_id == event.rc_call_id,
+                CallDisposition.rc_call_id.in_(disposition_call_ids),
             )
-        ).scalar_one_or_none()
-        overlay_status = disposition_row.status if disposition_row else ("MISSED" if event.state == "missed" else "NEW")
+        ).scalars().all()
+        disposition_by_call_id = {row.rc_call_id: row for row in disposition_rows}
+
+    for item in call_event_push_rows:
+        call_id = str(item.get("call_id", "")).strip()
+        disposition_row = disposition_by_call_id.get(call_id)
+        overlay_status = disposition_row.status if disposition_row else ("MISSED" if item.get("missed") else "NEW")
         await publish_event(
             resolved_org_id,
             {
                 "event": "call",
                 "data": {
-                    "event_type": event.event_filter or "telephony_session",
-                    "session_id": event.session_id,
-                    "rc_event_id": event.rc_event_id,
-                    "organization_id": resolved_org_id,
-                    "subscription_id": payload_subscription_id,
-                    "received_at": _now_utc().isoformat(),
-                    "event_filter": event.event_filter,
-                    "call_id": event.rc_call_id,
-                    "state": event.state,
-                    "disposition": event.disposition,
-                    "from_number": event.from_number,
-                    "to_number": event.to_number,
-                    "direction": event.direction,
-                    "extension_id": event.extension_id,
-                    "started_at": event.started_at.isoformat() if event.started_at else None,
-                    "ended_at": event.ended_at.isoformat() if event.ended_at else None,
+                    "event_type": item.get("event_type"),
+                    "session_id": item.get("session_id"),
+                    "rc_event_id": item.get("rc_event_id"),
+                    "organization_id": item.get("organization_id"),
+                    "subscription_id": item.get("subscription_id"),
+                    "received_at": item.get("received_at"),
+                    "event_filter": item.get("event_filter"),
+                    "call_id": item.get("call_id"),
+                    "state": item.get("state"),
+                    "disposition": item.get("disposition"),
+                    "from_number": item.get("from_number"),
+                    "to_number": item.get("to_number"),
+                    "direction": item.get("direction"),
+                    "extension_id": item.get("extension_id"),
+                    "started_at": item.get("started_at"),
+                    "answered_at": item.get("answered_at"),
+                    "ended_at": item.get("ended_at"),
+                    "missed": bool(item.get("missed", False)),
+                    "call_date": item.get("call_date"),
                     "overlay_status": overlay_status,
                     "notes": disposition_row.notes if disposition_row else None,
                     "assigned_to_user_id": disposition_row.assigned_to_user_id if disposition_row else None,
@@ -1235,28 +1451,110 @@ async def ringcentral_test_event(
 
 @router.get("/call-center/snapshot", response_model=CallCenterSnapshotRead)
 def call_center_snapshot(
+    date: str | None = Query(default=None),
     membership: OrganizationMembership = Depends(get_current_membership),
     db: Session = Depends(get_db),
     _: None = Depends(require_permission("calls:read")),
 ) -> CallCenterSnapshotRead:
-    config = _load_config_or_raise()
-    try:
-        ensured_subscription = ensure_subscription(
-            db=db,
-            config=config,
-            organization_id=membership.organization_id,
-            user_id=membership.user_id,
-            force=False,
-        )
-    except RingCentralRealtimeError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    requested_date = _parse_snapshot_date(date)
+    today_local = _today_local_call_date()
+    ensured_subscription = None
+    if requested_date == today_local:
+        config = _load_config_or_raise()
+        try:
+            ensured_subscription = ensure_subscription(
+                db=db,
+                config=config,
+                organization_id=membership.organization_id,
+                user_id=membership.user_id,
+                force=False,
+            )
+        except RingCentralRealtimeError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     snapshot = _build_call_center_snapshot(
         db=db,
         organization_id=membership.organization_id,
+        call_date=requested_date,
+        include_presence=requested_date == today_local,
     )
-    snapshot.subscription_status = ensured_subscription.status
+    if ensured_subscription:
+        snapshot.subscription_status = ensured_subscription.status
     return snapshot
+
+
+@router.get("/call-center/export")
+def call_center_export(
+    date: str | None = Query(default=None),
+    membership: OrganizationMembership = Depends(get_current_membership),
+    db: Session = Depends(get_db),
+    _: None = Depends(require_permission("calls:read")),
+) -> Response:
+    requested_date = _parse_snapshot_date(date)
+    snapshot = _build_call_center_snapshot(
+        db=db,
+        organization_id=membership.organization_id,
+        call_date=requested_date,
+        include_presence=False,
+    )
+
+    output = io.StringIO(newline="")
+    fieldnames = [
+        "call_date",
+        "call_id",
+        "session_id",
+        "state",
+        "missed",
+        "overlay_status",
+        "called_back",
+        "disposition",
+        "from_number",
+        "to_number",
+        "direction",
+        "extension_id",
+        "started_at",
+        "answered_at",
+        "ended_at",
+        "last_event_at",
+        "assigned_to_user_id",
+        "notes",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in snapshot.call_log:
+        writer.writerow(
+            {
+                "call_date": row.call_date.isoformat() if row.call_date else requested_date.isoformat(),
+                "call_id": row.call_id,
+                "session_id": row.session_id or "",
+                "state": row.state,
+                "missed": "true" if row.missed else "false",
+                "overlay_status": row.overlay_status,
+                "called_back": "true" if row.overlay_status == "CALLED_BACK" else "false",
+                "disposition": row.disposition or "",
+                "from_number": row.from_number or "",
+                "to_number": row.to_number or "",
+                "direction": row.direction or "",
+                "extension_id": row.extension_id or "",
+                "started_at": row.started_at.isoformat() if row.started_at else "",
+                "answered_at": row.answered_at.isoformat() if row.answered_at else "",
+                "ended_at": row.ended_at.isoformat() if row.ended_at else "",
+                "last_event_at": row.last_event_at.isoformat(),
+                "assigned_to_user_id": row.assigned_to_user_id or "",
+                "notes": row.notes or "",
+            }
+        )
+
+    filename = f"call-center-{requested_date.isoformat()}.csv"
+    csv_body = "\ufeff" + output.getvalue()
+    return Response(
+        content=csv_body,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.post("/call-center/calls/{call_id}/disposition", response_model=CallDispositionRead)
@@ -1357,6 +1655,8 @@ async def call_center_stream(
                             snapshot = _build_call_center_snapshot(
                                 db=db,
                                 organization_id=organization_id,
+                                call_date=_today_local_call_date(),
+                                include_presence=True,
                             )
                             yield _sse_message("snapshot", snapshot.model_dump(by_alias=True))
         finally:

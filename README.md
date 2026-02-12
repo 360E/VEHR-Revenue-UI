@@ -269,6 +269,7 @@ Optional (required only for webhook subscription flow):
 
 - RINGCENTRAL_WEBHOOK_SHARED_SECRET
 - PUBLIC_WEBHOOK_BASE_URL (example: https://api.360-encompass.com)
+- CALL_CENTER_TIMEZONE (optional, default: America/New_York; used for `call_date` partitioning)
 
 Connect flow:
 
@@ -286,7 +287,7 @@ Webhook configuration:
 - Optional compatibility endpoint:
   `https://api.360-encompass.com/api/v1/integrations/ringcentral/webhook?organization_id=<ORG_ID>&secret=<RINGCENTRAL_WEBHOOK_SHARED_SECRET>`
 - Point RingCentral event subscriptions to this URL.
-- After a test call event, verify rows are created in `call_events` (and `ringcentral_events` legacy mirror).
+- After a test call event, verify rows are created in `live_calls` (upsert by `session_id`) and `call_events` (raw event log).
 - Open `Calls & Reception` and confirm events appear without manual refresh (SSE stream).
 
 Real-time infrastructure API checks (backend only):
@@ -318,6 +319,21 @@ curl -X POST "http://127.0.0.1:8000/api/v1/webhooks/ringcentral/test-event" \
 ```bash
 curl "http://127.0.0.1:8000/api/v1/call-center/snapshot" \
   -H "Authorization: Bearer <token>"
+```
+
+Historical snapshot by day:
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/call-center/snapshot?date=2026-02-12" \
+  -H "Authorization: Bearer <token>"
+```
+
+Daily CSV export (Power BI / Excel):
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/call-center/export?date=2026-02-12" \
+  -H "Authorization: Bearer <token>" \
+  -o call-center-2026-02-12.csv
 ```
 
 ```text

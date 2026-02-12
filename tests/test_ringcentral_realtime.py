@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.rbac import ROLE_ADMIN, ROLE_RECEPTIONIST
 from app.core.security import create_access_token, hash_password
 from app.db.base import Base
 from app.db.models.call_disposition import CallDisposition
-from app.db.models.call_event import CallEvent
+from app.db.models.live_call import LiveCall
 from app.db.models.organization import Organization
 from app.db.models.organization_membership import OrganizationMembership
 from app.db.models.user import User
@@ -180,6 +182,72 @@ def test_ringcentral_webhook_pushes_event_to_bus(tmp_path, monkeypatch) -> None:
         engine.dispose()
 
 
+def test_ringcentral_webhook_upserts_live_call_and_marks_missed(tmp_path, monkeypatch) -> None:
+    _set_required_env(monkeypatch)
+    engine, session_factory = _build_session(tmp_path)
+    try:
+        _admin_token, org_id, _user_id = _create_user_membership(
+            session_factory,
+            org_name="RingCentral Live Call Upsert Org",
+            email="ringcentral-live-call-upsert@example.com",
+            role=ROLE_ADMIN,
+        )
+        ringing_payload = {
+            "event": "/restapi/v1.0/account/~/extension/~/telephony/sessions",
+            "eventId": "evt-upsert-1",
+            "body": {
+                "telephonySessionId": "session-upsert-1",
+                "id": "call-upsert-1",
+                "from": {"phoneNumber": "+15550000001"},
+                "to": {"phoneNumber": "+15550000002"},
+                "direction": "Inbound",
+                "status": {"code": "Ringing"},
+            },
+        }
+        disconnected_payload = {
+            "event": "/restapi/v1.0/account/~/extension/~/telephony/sessions",
+            "eventId": "evt-upsert-2",
+            "body": {
+                "telephonySessionId": "session-upsert-1",
+                "id": "call-upsert-1",
+                "from": {"phoneNumber": "+15550000001"},
+                "to": {"phoneNumber": "+15550000002"},
+                "direction": "Inbound",
+                "status": {"code": "Disconnected", "reason": "NoAnswer"},
+            },
+        }
+
+        with TestClient(app) as client:
+            response_one = client.post(
+                f"/api/v1/integrations/ringcentral/webhook?organization_id={org_id}&secret=webhook-secret-value",
+                json=ringing_payload,
+            )
+            assert response_one.status_code == 200
+            response_two = client.post(
+                f"/api/v1/integrations/ringcentral/webhook?organization_id={org_id}&secret=webhook-secret-value",
+                json=disconnected_payload,
+            )
+            assert response_two.status_code == 200
+
+        with session_factory() as db:
+            rows = db.execute(
+                select(LiveCall).where(
+                    LiveCall.organization_id == org_id,
+                    LiveCall.session_id == "session-upsert-1",
+                )
+            ).scalars().all()
+            assert len(rows) == 1
+            live_call = rows[0]
+            assert live_call.state == "disconnected"
+            assert live_call.missed is True
+            assert live_call.answered_at is None
+            assert live_call.rc_call_id == "call-upsert-1"
+    finally:
+        app.dependency_overrides.clear()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
 def test_ringcentral_test_event_publishes_call_and_presence(tmp_path, monkeypatch) -> None:
     _set_required_env(monkeypatch)
     engine, session_factory = _build_session(tmp_path)
@@ -230,42 +298,57 @@ def test_call_center_snapshot_returns_live_calls_dispositions_and_presence(tmp_p
             lambda **kwargs: SimpleNamespace(status="ACTIVE", rc_subscription_id="sub-snapshot-1", expires_at=None),
         )
 
+        call_date = "2026-02-12"
         with session_factory() as db:
             db.add_all(
                 [
-                    CallEvent(
+                    LiveCall(
                         organization_id=org_id,
-                        type="call",
+                        session_id="session-missed",
                         rc_call_id="call-missed",
-                        payload_json=json.dumps({"state": "missed", "from_number": "+15550001111"}),
-                        received_at=datetime.now(timezone.utc),
+                        state="disconnected",
+                        from_number="+15550001111",
+                        started_at=datetime(2026, 2, 12, 12, 0, tzinfo=timezone.utc),
+                        ended_at=datetime(2026, 2, 12, 12, 1, tzinfo=timezone.utc),
+                        last_event_at=datetime(2026, 2, 12, 12, 1, tzinfo=timezone.utc),
+                        missed=True,
+                        call_date=datetime.fromisoformat(call_date).date(),
                     ),
-                    CallEvent(
+                    LiveCall(
                         organization_id=org_id,
-                        type="call",
+                        session_id="session-ringing",
                         rc_call_id="call-ringing",
-                        payload_json=json.dumps({"state": "ringing", "from_number": "+15550002222"}),
-                        received_at=datetime.now(timezone.utc) + timedelta(seconds=1),
+                        state="ringing",
+                        from_number="+15550002222",
+                        started_at=datetime(2026, 2, 12, 12, 2, tzinfo=timezone.utc),
+                        last_event_at=datetime(2026, 2, 12, 12, 2, tzinfo=timezone.utc),
+                        missed=False,
+                        call_date=datetime.fromisoformat(call_date).date(),
                     ),
-                    CallEvent(
+                    LiveCall(
                         organization_id=org_id,
-                        type="call",
+                        session_id="session-active",
                         rc_call_id="call-active",
-                        payload_json=json.dumps({"state": "connected", "from_number": "+15550003333"}),
-                        received_at=datetime.now(timezone.utc) + timedelta(seconds=2),
+                        state="answered",
+                        from_number="+15550003333",
+                        started_at=datetime(2026, 2, 12, 12, 3, tzinfo=timezone.utc),
+                        answered_at=datetime(2026, 2, 12, 12, 3, tzinfo=timezone.utc),
+                        last_event_at=datetime(2026, 2, 12, 12, 4, tzinfo=timezone.utc),
+                        missed=False,
+                        call_date=datetime.fromisoformat(call_date).date(),
                     ),
-                    CallEvent(
+                    LiveCall(
                         organization_id=org_id,
-                        type="call",
+                        session_id="session-completed",
                         rc_call_id="call-completed",
-                        payload_json=json.dumps(
-                            {
-                                "state": "ended",
-                                "from_number": "+15550004444",
-                                "ended_at": "2026-02-12T00:00:00Z",
-                            }
-                        ),
-                        received_at=datetime.now(timezone.utc) + timedelta(seconds=3),
+                        state="disconnected",
+                        from_number="+15550004444",
+                        started_at=datetime(2026, 2, 12, 12, 5, tzinfo=timezone.utc),
+                        answered_at=datetime(2026, 2, 12, 12, 6, tzinfo=timezone.utc),
+                        ended_at=datetime(2026, 2, 12, 12, 8, tzinfo=timezone.utc),
+                        last_event_at=datetime(2026, 2, 12, 12, 8, tzinfo=timezone.utc),
+                        missed=False,
+                        call_date=datetime.fromisoformat(call_date).date(),
                     ),
                 ]
             )
@@ -281,7 +364,7 @@ def test_call_center_snapshot_returns_live_calls_dispositions_and_presence(tmp_p
 
         with TestClient(app) as client:
             response = client.get(
-                "/api/v1/call-center/snapshot",
+                f"/api/v1/call-center/snapshot?date={call_date}",
                 headers={"Authorization": f"Bearer {snapshot_token}"},
             )
             assert response.status_code == 200
@@ -298,6 +381,56 @@ def test_call_center_snapshot_returns_live_calls_dispositions_and_presence(tmp_p
 
             disposition_ids = {item["call_id"] for item in payload["dispositions"]}
             assert "call-missed" in disposition_ids
+    finally:
+        app.dependency_overrides.clear()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+def test_call_center_export_returns_csv_for_selected_date(tmp_path, monkeypatch) -> None:
+    _set_required_env(monkeypatch)
+    engine, session_factory = _build_session(tmp_path)
+    try:
+        export_token, org_id, _user_id = _create_user_membership(
+            session_factory,
+            org_name="RingCentral Export Org",
+            email="ringcentral-export@example.com",
+            role=ROLE_ADMIN,
+        )
+        call_date = datetime(2026, 2, 11, tzinfo=timezone.utc).date()
+        with session_factory() as db:
+            db.add(
+                LiveCall(
+                    organization_id=org_id,
+                    session_id="session-export-1",
+                    rc_call_id="call-export-1",
+                    state="answered",
+                    from_number="+15550009999",
+                    to_number="+15550008888",
+                    direction="Inbound",
+                    started_at=datetime(2026, 2, 11, 14, 0, tzinfo=timezone.utc),
+                    answered_at=datetime(2026, 2, 11, 14, 1, tzinfo=timezone.utc),
+                    last_event_at=datetime(2026, 2, 11, 14, 1, tzinfo=timezone.utc),
+                    missed=False,
+                    call_date=call_date,
+                )
+            )
+            db.commit()
+
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/v1/call-center/export?date=2026-02-11",
+                headers={"Authorization": f"Bearer {export_token}"},
+            )
+            assert response.status_code == 200
+            assert "text/csv" in response.headers.get("content-type", "")
+            decoded = response.content.decode("utf-8-sig")
+            rows = list(csv.DictReader(StringIO(decoded)))
+            assert rows
+            assert rows[0]["call_id"] == "call-export-1"
+            assert rows[0]["state"] == "answered"
+            assert rows[0]["missed"] == "false"
+            assert rows[0]["call_date"] == "2026-02-11"
     finally:
         app.dependency_overrides.clear()
         Base.metadata.drop_all(bind=engine)

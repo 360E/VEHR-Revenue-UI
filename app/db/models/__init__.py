@@ -14,6 +14,7 @@ from app.db.models.form_template import FormTemplate  # noqa: F401
 from app.db.models.integration_account import IntegrationAccount  # noqa: F401
 from app.db.models.integration_token import IntegrationToken  # noqa: F401
 from app.db.models.invite import Invite  # noqa: F401
+from app.db.models.live_call import LiveCall  # noqa: F401
 from app.db.models.organization import Organization  # noqa: F401
 from app.db.models.organization_membership import OrganizationMembership  # noqa: F401
 from app.db.models.organization_role import OrganizationRole  # noqa: F401

@@ -67,6 +67,10 @@ class Organization(Base):
         "CallDisposition",
         back_populates="organization",
     )
+    live_calls: Mapped[list["LiveCall"]] = relationship(
+        "LiveCall",
+        back_populates="organization",
+    )
     call_events: Mapped[list["CallEvent"]] = relationship(
         "CallEvent",
         back_populates="organization",

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { getBrowserAccessToken } from "@/lib/auth";
-import { ApiError, apiFetch, buildUrl } from "@/lib/api";
+import { ApiError, apiFetch, apiFetchBlob, buildUrl } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -20,13 +20,17 @@ type PresenceItem = {
 
 type CallRow = {
   call_id: string;
+  session_id?: string | null;
   state: string;
+  missed?: boolean;
+  call_date?: string | null;
   disposition?: string | null;
   from_number?: string | null;
   to_number?: string | null;
   direction?: string | null;
   extension_id?: string | null;
   started_at?: string | null;
+  answered_at?: string | null;
   ended_at?: string | null;
   last_event_at: string;
   overlay_status: "NEW" | "MISSED" | "CALLED_BACK" | "RESOLVED";
@@ -52,13 +56,17 @@ type DispositionResponse = {
 
 type CallEventPayload = {
   call_id: string;
+  session_id?: string | null;
   state: string;
+  missed?: boolean;
+  call_date?: string | null;
   disposition?: string | null;
   from_number?: string | null;
   to_number?: string | null;
   direction?: string | null;
   extension_id?: string | null;
   started_at?: string | null;
+  answered_at?: string | null;
   ended_at?: string | null;
   overlay_status?: "NEW" | "MISSED" | "CALLED_BACK" | "RESOLVED";
   assigned_to_user_id?: string | null;
@@ -111,13 +119,17 @@ function upsertCall(calls: CallRow[], incoming: Partial<CallRow> & { call_id: st
   const existing = calls.find((item) => item.call_id === incoming.call_id);
   const merged: CallRow = {
     call_id: incoming.call_id,
+    session_id: incoming.session_id ?? existing?.session_id ?? null,
     state: incoming.state || existing?.state || "unknown",
+    missed: incoming.missed ?? existing?.missed ?? false,
+    call_date: incoming.call_date ?? existing?.call_date ?? null,
     disposition: incoming.disposition ?? existing?.disposition ?? null,
     from_number: incoming.from_number ?? existing?.from_number ?? null,
     to_number: incoming.to_number ?? existing?.to_number ?? null,
     direction: incoming.direction ?? existing?.direction ?? null,
     extension_id: incoming.extension_id ?? existing?.extension_id ?? null,
     started_at: incoming.started_at ?? existing?.started_at ?? null,
+    answered_at: incoming.answered_at ?? existing?.answered_at ?? null,
     ended_at: incoming.ended_at ?? existing?.ended_at ?? null,
     last_event_at: incoming.last_event_at || new Date().toISOString(),
     overlay_status: incoming.overlay_status ?? existing?.overlay_status ?? "NEW",
@@ -131,19 +143,43 @@ function upsertCall(calls: CallRow[], incoming: Partial<CallRow> & { call_id: st
   );
 }
 
+function todayLocalDate(): string {
+  const now = new Date();
+  const offsetMs = now.getTimezoneOffset() * 60_000;
+  return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10);
+}
+
+function isAnsweredState(state: string): boolean {
+  return ["answered", "connected", "in_progress", "on_call"].includes(state.trim().toLowerCase());
+}
+
+function callRowTone(row: CallRow): string {
+  const unresolvedMissed = Boolean(row.missed || row.overlay_status === "MISSED")
+    && !["CALLED_BACK", "RESOLVED"].includes(row.overlay_status);
+  if (unresolvedMissed) return "border-rose-200 bg-rose-50 hover:bg-rose-100";
+  if (row.overlay_status === "CALLED_BACK" || isAnsweredState(row.state) || Boolean(row.answered_at)) {
+    return "border-emerald-200 bg-emerald-50 hover:bg-emerald-100";
+  }
+  return "border-slate-200 bg-slate-50 hover:bg-slate-100";
+}
+
 export default function CallsReceptionPage() {
+  const todayDate = useMemo(() => todayLocalDate(), []);
   const [presence, setPresence] = useState<PresenceItem[]>([]);
   const [callLog, setCallLog] = useState<CallRow[]>([]);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState(todayDate);
   const [workflowStatus, setWorkflowStatus] =
     useState<(typeof WORKFLOW_OPTIONS)[number]>("NEW");
   const [workflowNote, setWorkflowNote] = useState("");
   const [subscriptionStatus, setSubscriptionStatus] = useState("MISSING");
   const [streamStatus, setStreamStatus] = useState("connecting");
   const [isLoading, setIsLoading] = useState(true);
+  const [isExporting, setIsExporting] = useState(false);
   const [isSavingDisposition, setIsSavingDisposition] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const isHistorical = selectedDate !== todayDate;
 
   const activeCalls = useMemo(
     () => callLog.filter((row) => ["ringing", "answered", "connected", "in_progress", "on_call"].includes(row.state)),
@@ -171,16 +207,17 @@ export default function CallsReceptionPage() {
       setIsLoading(true);
       setError(null);
       try {
-        const snapshot = await apiFetch<SnapshotResponse>("/api/v1/call-center/snapshot", {
+        const snapshot = await apiFetch<SnapshotResponse>(`/api/v1/call-center/snapshot?date=${encodeURIComponent(selectedDate)}`, {
           cache: "no-store",
         });
         if (!mounted) return;
         setPresence(snapshot.presence);
         setCallLog(snapshot.call_log);
         setSubscriptionStatus(snapshot.subscription_status);
-        if (snapshot.call_log[0]) {
-          setSelectedCallId((current) => current || snapshot.call_log[0].call_id);
-        }
+        setSelectedCallId((current) => {
+          if (current && snapshot.call_log.some((item) => item.call_id === current)) return current;
+          return snapshot.call_log[0]?.call_id ?? null;
+        });
       } catch (loadError) {
         if (!mounted) return;
         setError(toMessage(loadError, "Unable to load call center snapshot."));
@@ -192,9 +229,13 @@ export default function CallsReceptionPage() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [selectedDate]);
 
   useEffect(() => {
+    if (isHistorical) {
+      setStreamStatus("historical");
+      return;
+    }
     const token = getBrowserAccessToken();
     if (!token) {
       setStreamStatus("offline");
@@ -224,13 +265,17 @@ export default function CallsReceptionPage() {
       setCallLog((current) =>
         upsertCall(current, {
           call_id: payload.call_id,
+          session_id: payload.session_id ?? null,
           state: payload.state,
+          missed: payload.missed ?? payload.state === "missed",
+          call_date: payload.call_date ?? null,
           disposition: payload.disposition,
           from_number: payload.from_number,
           to_number: payload.to_number,
           direction: payload.direction,
           extension_id: payload.extension_id,
           started_at: payload.started_at,
+          answered_at: payload.answered_at,
           ended_at: payload.ended_at,
           overlay_status: payload.overlay_status,
           assigned_to_user_id: payload.assigned_to_user_id,
@@ -269,7 +314,29 @@ export default function CallsReceptionPage() {
       source.close();
       setStreamStatus("offline");
     };
-  }, []);
+  }, [isHistorical]);
+
+  async function handleExportCsv() {
+    setIsExporting(true);
+    setError(null);
+    try {
+      const blob = await apiFetchBlob(`/api/v1/call-center/export?date=${encodeURIComponent(selectedDate)}`, {
+        cache: "no-store",
+      });
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = `call-center-${selectedDate}.csv`;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (exportError) {
+      setError(toMessage(exportError, "Unable to export CSV."));
+    } finally {
+      setIsExporting(false);
+    }
+  }
 
   async function handleSaveDisposition() {
     if (!selectedCall) return;
@@ -316,6 +383,28 @@ export default function CallsReceptionPage() {
         <p className="text-xs text-slate-500">
           Stream: {streamStatus} - Subscription: {subscriptionStatus}
         </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500" htmlFor="call_date">
+            Call date
+          </label>
+          <input
+            id="call_date"
+            type="date"
+            className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm"
+            value={selectedDate}
+            onChange={(event) => setSelectedDate(event.target.value)}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            className="h-9 rounded-lg px-3"
+            onClick={() => void handleExportCsv()}
+            disabled={isExporting}
+          >
+            {isExporting ? "Exporting..." : "Export CSV"}
+          </Button>
+          {isHistorical ? <p className="text-xs text-slate-500">Historical date selected: live stream paused.</p> : null}
+        </div>
       </div>
 
       {error ? <p className="text-sm text-rose-700">{error}</p> : null}
@@ -364,8 +453,8 @@ export default function CallsReceptionPage() {
                     type="button"
                     className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
                       selectedCallId === row.call_id
-                        ? "border-sky-300 bg-sky-50"
-                        : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+                        ? "border-sky-400 bg-sky-50 ring-1 ring-sky-200"
+                        : callRowTone(row)
                     }`}
                     onClick={() => setSelectedCallId(row.call_id)}
                   >
@@ -410,9 +499,10 @@ export default function CallsReceptionPage() {
                     </label>
                     <select
                       id="workflow_status"
-                      className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
+                      className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm disabled:cursor-not-allowed disabled:bg-slate-100"
                       value={workflowStatus}
                       onChange={(event) => setWorkflowStatus(event.target.value as (typeof WORKFLOW_OPTIONS)[number])}
+                      disabled={isHistorical}
                     >
                       {WORKFLOW_OPTIONS.map((value) => (
                         <option key={value} value={value}>
@@ -428,9 +518,10 @@ export default function CallsReceptionPage() {
                     </label>
                     <textarea
                       id="workflow_note"
-                      className="min-h-24 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+                      className="min-h-24 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-slate-100"
                       value={workflowNote}
                       onChange={(event) => setWorkflowNote(event.target.value)}
+                      disabled={isHistorical}
                     />
                   </div>
 
@@ -438,9 +529,9 @@ export default function CallsReceptionPage() {
                     type="button"
                     className="h-9 rounded-lg px-3"
                     onClick={() => void handleSaveDisposition()}
-                    disabled={isSavingDisposition}
+                    disabled={isSavingDisposition || isHistorical}
                   >
-                    {isSavingDisposition ? "Saving..." : "Save disposition"}
+                    {isHistorical ? "Historical view" : (isSavingDisposition ? "Saving..." : "Save disposition")}
                   </Button>
                 </>
               )}
