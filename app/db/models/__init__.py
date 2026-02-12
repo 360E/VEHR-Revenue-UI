@@ -1,5 +1,7 @@
 # Import models here so SQLAlchemy registers them with Base.metadata
 from app.db.models.audit_event import AuditEvent  # noqa: F401
+from app.db.models.ai_message import AiMessage  # noqa: F401
+from app.db.models.ai_thread import AiThread  # noqa: F401
 from app.db.models.announcement import Announcement  # noqa: F401
 from app.db.models.clinical_audit_finding import ClinicalAuditFinding  # noqa: F401
 from app.db.models.clinical_audit_run import ClinicalAuditRun  # noqa: F401
@@ -43,5 +45,8 @@ from app.db.models.service import Service  # noqa: F401
 from app.db.models.service_document_template import ServiceDocumentTemplate  # noqa: F401
 from app.db.models.task import Task  # noqa: F401
 from app.db.models.user import User  # noqa: F401
+from app.db.models.scribe_capture import ScribeCapture  # noqa: F401
+from app.db.models.scribe_note_draft import ScribeNoteDraft  # noqa: F401
+from app.db.models.scribe_transcript import ScribeTranscript  # noqa: F401
 from app.db.models.webhook_delivery import WebhookDelivery  # noqa: F401
 from app.db.models.webhook_endpoint import WebhookEndpoint  # noqa: F401

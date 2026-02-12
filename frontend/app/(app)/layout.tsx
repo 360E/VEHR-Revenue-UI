@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import Sidebar from "../components/sidebar";
+import CopilotDrawer from "../components/copilot-drawer";
 import { BRANDING } from "@/lib/branding";
 import { ApiError, apiFetch } from "@/lib/api";
 import { clearAccessToken } from "@/lib/auth";
@@ -178,6 +179,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           </footer>
         </div>
       </div>
+      <CopilotDrawer />
     </div>
   );
 }

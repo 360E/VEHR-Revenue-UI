@@ -46,4 +46,8 @@ class Encounter(Base):
         "PatientNote",
         back_populates="encounter",
     )
+    scribe_captures: Mapped[list["ScribeCapture"]] = relationship(
+        "ScribeCapture",
+        back_populates="encounter",
+    )
 

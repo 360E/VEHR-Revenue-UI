@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    ai_copilot,
     admin_center,
     audit,
     auth,
@@ -21,6 +22,7 @@ from app.api.v1.endpoints import (
     portal,
     reception,
     sharepoint,
+    scribe,
     staff,
     services,
     tasks,
@@ -30,6 +32,7 @@ from app.api.v1.endpoints import (
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
+api_router.include_router(ai_copilot.router)
 api_router.include_router(admin_center.router)
 api_router.include_router(organizations.router)
 api_router.include_router(organization_home.router)
@@ -54,3 +57,4 @@ api_router.include_router(tasks.router)
 api_router.include_router(reception.router)
 api_router.include_router(health.router)
 api_router.include_router(uploads.router)
+api_router.include_router(scribe.router)

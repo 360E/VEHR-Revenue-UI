@@ -352,3 +352,73 @@ Update the baseline screenshot:
 ```bash
 npm --prefix frontend run test:visual:update
 ```
+
+AI Copilot + AI Scribe
+
+Required env vars:
+
+- INTEGRATION_TOKEN_KEY (used for at-rest encryption of ai_messages, transcripts, drafts, and capture keys)
+- OPENAI_API_KEY
+
+Optional env vars:
+
+- OPENAI_CHAT_MODEL (default: gpt-4o-mini)
+- OPENAI_TRANSCRIBE_MODEL (default: whisper-1)
+- OPENAI_TIMEOUT_SECONDS (default: 90)
+- ScribeAudioRetentionDays (default: 14)
+
+API routes:
+
+- `GET /api/v1/ai/threads`
+- `POST /api/v1/ai/threads`
+- `GET /api/v1/ai/threads/{thread_id}/messages`
+- `POST /api/v1/ai/chat`
+- `POST /api/v1/scribe/captures`
+- `POST /api/v1/scribe/captures/{id}/complete`
+- `POST /api/v1/scribe/captures/{id}/transcribe`
+- `POST /api/v1/scribe/captures/{id}/draft-note`
+- `PUT /api/v1/scribe/drafts/{id}`
+- `POST /api/v1/scribe/drafts/{id}/insert-into-chart`
+
+Quick API check:
+
+1. Send a Copilot message:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/ai/chat" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d "{\"message\":\"Draft SOAP note for intake follow-up\",\"context\":{\"path\":\"/encounters\",\"module\":\"encounters\"}}"
+```
+
+2. Create a scribe capture upload URL:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/scribe/captures" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d "{\"encounter_id\":\"<encounter-id>\",\"filename\":\"visit.webm\",\"content_type\":\"audio/webm\"}"
+```
+
+3. Upload audio to `upload_url` from step 2, then complete:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/scribe/captures/<capture-id>/complete" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d "{}"
+```
+
+4. Transcribe and generate draft:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/scribe/captures/<capture-id>/transcribe" \
+  -H "Authorization: Bearer <token>"
+```
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/scribe/captures/<capture-id>/draft-note" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d "{\"note_type\":\"SOAP\"}"
+```

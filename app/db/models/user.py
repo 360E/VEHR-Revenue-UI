@@ -38,6 +38,14 @@ class User(Base):
         "RingCentralSubscription",
         back_populates="user",
     )
+    ai_threads: Mapped[list["AiThread"]] = relationship(
+        "AiThread",
+        back_populates="user",
+    )
+    scribe_captures: Mapped[list["ScribeCapture"]] = relationship(
+        "ScribeCapture",
+        back_populates="user",
+    )
     assigned_call_dispositions: Mapped[list["CallDisposition"]] = relationship(
         "CallDisposition",
         back_populates="assigned_to_user",

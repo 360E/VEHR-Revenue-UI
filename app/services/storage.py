@@ -191,16 +191,24 @@ def delete_object(key: str) -> None:
     client.delete_object(Bucket=settings.bucket, Key=key)
 
 
-def generate_presigned_put_url(key: str, content_type: str, expires: int = 900) -> str:
+def generate_presigned_put_url(
+    key: str,
+    content_type: str,
+    expires: int = 900,
+    server_side_encryption: str | None = None,
+) -> str:
     settings = get_s3_settings()
     client = _get_s3_client()
+    params = {
+        "Bucket": settings.bucket,
+        "Key": key,
+        "ContentType": content_type,
+    }
+    if server_side_encryption:
+        params["ServerSideEncryption"] = server_side_encryption
     return client.generate_presigned_url(
         "put_object",
-        Params={
-            "Bucket": settings.bucket,
-            "Key": key,
-            "ContentType": content_type,
-        },
+        Params=params,
         ExpiresIn=expires,
         HttpMethod="PUT",
     )

@@ -75,6 +75,14 @@ class Organization(Base):
         "CallEvent",
         back_populates="organization",
     )
+    ai_threads: Mapped[list["AiThread"]] = relationship(
+        "AiThread",
+        back_populates="organization",
+    )
+    scribe_captures: Mapped[list["ScribeCapture"]] = relationship(
+        "ScribeCapture",
+        back_populates="organization",
+    )
     ringcentral_events: Mapped[list["RingCentralEvent"]] = relationship(
         "RingCentralEvent",
         back_populates="organization",
