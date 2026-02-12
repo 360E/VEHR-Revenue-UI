@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
@@ -112,10 +113,13 @@ def _extract_webhook_fields(payload: dict[str, Any]) -> dict[str, Any]:
     call_id = str(body.get("id", "")).strip() or session_id
 
     parties_raw = body.get("parties")
+    parties: list[dict[str, Any]] = []
     if isinstance(parties_raw, list):
-        first_party = parties_raw[0] if parties_raw else {}
+        parties = [party for party in parties_raw if isinstance(party, dict)]
+        first_party = parties[0] if parties else {}
     elif isinstance(body.get("party"), dict):
         first_party = body.get("party")
+        parties = [first_party]
     else:
         first_party = {}
     party = first_party if isinstance(first_party, dict) else {}
@@ -158,13 +162,23 @@ def _extract_webhook_fields(payload: dict[str, Any]) -> dict[str, Any]:
     direction = str(party.get("direction", "")).strip() or str(body.get("direction", "")).strip() or None
     started_at = _parse_iso_datetime(party.get("startTime")) or _parse_iso_datetime(body.get("startTime"))
     ended_at = _parse_iso_datetime(party.get("endTime")) or _parse_iso_datetime(body.get("endTime"))
-    account_id = (
-        str(body.get("ownerId", "")).strip()
-        or str(body.get("accountId", "")).strip()
-        or str(payload.get("ownerId", "")).strip()
-        or str(payload.get("accountId", "")).strip()
-        or None
-    )
+    account_id = None
+    for party_item in parties:
+        candidate = str(party_item.get("accountId", "")).strip()
+        if candidate:
+            account_id = candidate
+            break
+    if not account_id:
+        account_id = str(body.get("accountId", "")).strip() or None
+    if not account_id:
+        account_id = str(payload.get("accountId", "")).strip() or None
+    if not account_id:
+        event_filter = str(payload.get("event", "")).strip()
+        matched = re.search(r"/account/([^/]+)", event_filter)
+        if matched:
+            account_id = matched.group(1).strip() or None
+            if account_id == "~":
+                account_id = None
 
     return {
         "event_type": event_type,
@@ -261,10 +275,22 @@ def _resolve_webhook_integration_row(
         return row
 
     if not payload_account_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="organization_id is required when webhook payload does not include accountId",
-        )
+        rows = db.execute(
+            select(IntegrationToken).where(
+                IntegrationToken.provider == RINGCENTRAL_PROVIDER,
+            )
+        ).scalars().all()
+        if not rows:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No RingCentral integration found for webhook account",
+            )
+        if len(rows) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="organization_id is required when webhook payload does not include accountId",
+            )
+        return rows[0]
 
     rows = db.execute(
         select(IntegrationToken).where(

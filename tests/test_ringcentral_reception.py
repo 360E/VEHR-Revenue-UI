@@ -273,3 +273,78 @@ def test_ringcentral_webhook_normalizes_noanswer_to_missed(tmp_path, monkeypatch
         app.dependency_overrides.clear()
         Base.metadata.drop_all(bind=engine)
         engine.dispose()
+
+
+def test_ringcentral_webhook_ignores_owner_id_for_account_match(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("RINGCENTRAL_WEBHOOK_SECRET", "webhook-secret-value")
+    engine, session_factory = _build_session(tmp_path)
+    try:
+        _receptionist_token, org_id = _seed_reception_user(session_factory)
+        webhook_payload = {
+            "event": "/restapi/v1.0/account/~/extension/~/telephony/sessions",
+            "eventId": "evt-004",
+            "body": {
+                "telephonySessionId": "session-jkl",
+                "id": "call-jkl",
+                "ownerId": "ext-999",
+                "from": {"phoneNumber": "+15550007777"},
+                "to": {"phoneNumber": "+15550008888"},
+                "direction": "Inbound",
+                "status": {"code": "Disconnected", "reason": "NoAnswer"},
+            },
+        }
+
+        with TestClient(app) as client:
+            webhook_response = client.post(
+                f"/api/v1/integrations/ringcentral/webhook?organization_id={org_id}&secret=webhook-secret-value",
+                json=webhook_payload,
+            )
+            assert webhook_response.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+def test_ringcentral_webhook_resolves_account_from_parties_payload(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("RINGCENTRAL_WEBHOOK_SECRET", "webhook-secret-value")
+    engine, session_factory = _build_session(tmp_path)
+    try:
+        _receptionist_token, org_id = _seed_reception_user(session_factory)
+        webhook_payload = {
+            "event": "/restapi/v1.0/account/~/extension/~/telephony/sessions",
+            "eventId": "evt-005",
+            "body": {
+                "telephonySessionId": "session-mno",
+                "parties": [
+                    {
+                        "id": "party-1",
+                        "accountId": "acct-123",
+                        "from": {"phoneNumber": "+15550009999"},
+                        "to": {"phoneNumber": "+15550000000"},
+                        "direction": "Inbound",
+                        "status": {"code": "Disconnected", "reason": "NoAnswer"},
+                    }
+                ],
+            },
+        }
+
+        with TestClient(app) as client:
+            webhook_response = client.post(
+                "/api/v1/integrations/ringcentral/webhook?secret=webhook-secret-value",
+                json=webhook_payload,
+            )
+            assert webhook_response.status_code == 200
+            event_id = webhook_response.json()["event_id"]
+
+        with session_factory() as db:
+            stored_event = db.execute(
+                select(RingCentralEvent).where(RingCentralEvent.id == event_id)
+            ).scalar_one_or_none()
+            assert stored_event is not None
+            assert stored_event.organization_id == org_id
+            assert stored_event.disposition == "missed"
+    finally:
+        app.dependency_overrides.clear()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
