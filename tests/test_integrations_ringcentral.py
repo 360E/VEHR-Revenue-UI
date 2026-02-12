@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
@@ -10,9 +11,9 @@ from app.core.rbac import ROLE_ADMIN, ROLE_RECEPTIONIST
 from app.core.security import create_access_token, hash_password
 from app.db.base import Base
 from app.db.models.audit_event import AuditEvent
-from app.db.models.integration_token import IntegrationToken
 from app.db.models.organization import Organization
 from app.db.models.organization_membership import OrganizationMembership
+from app.db.models.ringcentral_credential import RingCentralCredential
 from app.db.models.user import User
 from app.db.session import get_db
 from app.main import app
@@ -20,6 +21,20 @@ from app.main import app
 
 def _auth_header(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _set_required_env(monkeypatch) -> None:
+    monkeypatch.setenv("RINGCENTRAL_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("RINGCENTRAL_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("RINGCENTRAL_SERVER_URL", "https://platform.ringcentral.com")
+    monkeypatch.setenv(
+        "RINGCENTRAL_REDIRECT_URI",
+        "https://api.360-encompass.com/api/v1/integrations/ringcentral/callback",
+    )
+    monkeypatch.setenv("RINGCENTRAL_WEBHOOK_SHARED_SECRET", "webhook-secret-value")
+    monkeypatch.setenv("PUBLIC_WEBHOOK_BASE_URL", "https://api.360-encompass.com")
+    monkeypatch.setenv("INTEGRATION_TOKEN_KEY", "integration-token-key-for-tests")
+    monkeypatch.setenv("RINGCENTRAL_POST_CONNECT_REDIRECT", "https://360-encompass.com/admin-center")
 
 
 def _build_session(tmp_path):
@@ -45,7 +60,7 @@ def _build_session(tmp_path):
     return engine, testing_session_local
 
 
-def _create_user_membership(session_factory, *, org_name: str, email: str, role: str) -> tuple[str, str]:
+def _create_user_membership(session_factory, *, org_name: str, email: str, role: str) -> tuple[str, str, str]:
     with session_factory() as db:
         org = Organization(name=org_name)
         db.add(org)
@@ -68,13 +83,14 @@ def _create_user_membership(session_factory, *, org_name: str, email: str, role:
             )
         )
         db.commit()
-        return create_access_token({"sub": user.id, "org_id": org.id}), org.id
+        return create_access_token({"sub": user.id, "org_id": org.id}), org.id, user.id
 
 
-def test_ringcentral_status_returns_false_when_not_connected(tmp_path) -> None:
+def test_ringcentral_status_returns_false_when_not_connected(tmp_path, monkeypatch) -> None:
+    _set_required_env(monkeypatch)
     engine, session_factory = _build_session(tmp_path)
     try:
-        admin_token, _org_id = _create_user_membership(
+        admin_token, _org_id, _user_id = _create_user_membership(
             session_factory,
             org_name="RingCentral Status Org",
             email="ringcentral-status-admin@example.com",
@@ -96,17 +112,10 @@ def test_ringcentral_status_returns_false_when_not_connected(tmp_path) -> None:
 
 
 def test_ringcentral_connect_requires_permissions(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("RINGCENTRAL_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("RINGCENTRAL_CLIENT_SECRET", "test-client-secret")
-    monkeypatch.setenv("RINGCENTRAL_SERVER_URL", "https://platform.ringcentral.com")
-    monkeypatch.setenv(
-        "RINGCENTRAL_REDIRECT_URI",
-        "https://api.360-encompass.com/api/v1/integrations/ringcentral/callback",
-    )
-
+    _set_required_env(monkeypatch)
     engine, session_factory = _build_session(tmp_path)
     try:
-        receptionist_token, _org_id = _create_user_membership(
+        receptionist_token, _org_id, _user_id = _create_user_membership(
             session_factory,
             org_name="RingCentral Permission Org",
             email="ringcentral-reception@example.com",
@@ -125,19 +134,10 @@ def test_ringcentral_connect_requires_permissions(tmp_path, monkeypatch) -> None
 
 
 def test_ringcentral_callback_stores_encrypted_tokens(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("RINGCENTRAL_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("RINGCENTRAL_CLIENT_SECRET", "test-client-secret")
-    monkeypatch.setenv("RINGCENTRAL_SERVER_URL", "https://platform.ringcentral.com")
-    monkeypatch.setenv(
-        "RINGCENTRAL_REDIRECT_URI",
-        "https://api.360-encompass.com/api/v1/integrations/ringcentral/callback",
-    )
-    monkeypatch.setenv("RINGCENTRAL_POST_CONNECT_REDIRECT", "https://360-encompass.com/admin-center")
-    monkeypatch.setenv("RINGCENTRAL_INTEGRATION_TOKEN_KEY", "ringcentral-token-encryption-test-key")
-
+    _set_required_env(monkeypatch)
     engine, session_factory = _build_session(tmp_path)
     try:
-        admin_token, org_id = _create_user_membership(
+        admin_token, org_id, user_id = _create_user_membership(
             session_factory,
             org_name="RingCentral Callback Org",
             email="ringcentral-callback-admin@example.com",
@@ -175,8 +175,12 @@ def test_ringcentral_callback_stores_encrypted_tokens(tmp_path, monkeypatch) -> 
             assert timeout == 20.0
             return FakeProfileResponse()
 
-        monkeypatch.setattr("app.services.ringcentral.httpx.post", fake_post)
-        monkeypatch.setattr("app.services.ringcentral.httpx.get", fake_get)
+        monkeypatch.setattr("app.services.ringcentral_realtime.httpx.post", fake_post)
+        monkeypatch.setattr("app.services.ringcentral_realtime.httpx.get", fake_get)
+        monkeypatch.setattr(
+            "app.api.v1.endpoints.ringcentral_live.ensure_subscription",
+            lambda **kwargs: SimpleNamespace(status="ACTIVE", rc_subscription_id="sub-1", expires_at=None),
+        )
 
         with TestClient(app) as client:
             connect_response = client.post(
@@ -184,7 +188,7 @@ def test_ringcentral_callback_stores_encrypted_tokens(tmp_path, monkeypatch) -> 
                 headers=_auth_header(admin_token),
             )
             assert connect_response.status_code == 200
-            auth_url = connect_response.json()["auth_url"]
+            auth_url = connect_response.json()["authorization_url"]
             parsed_query = parse_qs(urlparse(auth_url).query)
             state = parsed_query["state"][0]
 
@@ -200,15 +204,15 @@ def test_ringcentral_callback_stores_encrypted_tokens(tmp_path, monkeypatch) -> 
 
         with session_factory() as db:
             row = db.execute(
-                select(IntegrationToken).where(
-                    IntegrationToken.organization_id == org_id,
-                    IntegrationToken.provider == "ringcentral",
+                select(RingCentralCredential).where(
+                    RingCentralCredential.organization_id == org_id,
+                    RingCentralCredential.user_id == user_id,
                 )
             ).scalar_one_or_none()
             assert row is not None
-            assert row.account_id == "acct-456"
-            assert row.extension_id == "ext-123"
-            assert row.scope == "ReadAccounts ReadCallLog"
+            assert row.rc_account_id == "acct-456"
+            assert row.rc_extension_id == "ext-123"
+            assert row.scopes == "ReadAccounts ReadCallLog"
             assert row.access_token_enc != "access-token-plain"
             assert row.refresh_token_enc != "refresh-token-plain"
 
@@ -224,16 +228,16 @@ def test_ringcentral_callback_stores_encrypted_tokens(tmp_path, monkeypatch) -> 
 
 
 def test_ringcentral_status_is_org_scoped(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("INTEGRATION_TOKEN_KEY", "ringcentral-org-scope-test-key")
+    _set_required_env(monkeypatch)
     engine, session_factory = _build_session(tmp_path)
     try:
-        admin_a_token, org_a_id = _create_user_membership(
+        admin_a_token, org_a_id, user_a_id = _create_user_membership(
             session_factory,
             org_name="RingCentral Org A",
             email="ringcentral-admin-a@example.com",
             role=ROLE_ADMIN,
         )
-        admin_b_token, org_b_id = _create_user_membership(
+        admin_b_token, org_b_id, user_b_id = _create_user_membership(
             session_factory,
             org_name="RingCentral Org B",
             email="ringcentral-admin-b@example.com",
@@ -242,12 +246,14 @@ def test_ringcentral_status_is_org_scoped(tmp_path, monkeypatch) -> None:
 
         with session_factory() as db:
             db.add(
-                IntegrationToken(
+                RingCentralCredential(
                     organization_id=org_a_id,
-                    provider="ringcentral",
+                    user_id=user_a_id,
+                    rc_account_id="acct-a",
+                    rc_extension_id="ext-a",
                     access_token_enc="encrypted-access",
                     refresh_token_enc="encrypted-refresh",
-                    scope="ReadAccounts",
+                    scopes="ReadAccounts",
                 )
             )
             db.commit()
@@ -268,6 +274,7 @@ def test_ringcentral_status_is_org_scoped(tmp_path, monkeypatch) -> None:
             payload_b = org_b.json()
             assert payload_b["connected"] is False
             assert payload_b["account_id"] is None
+            assert user_a_id != user_b_id
             assert org_b_id != org_a_id
     finally:
         app.dependency_overrides.clear()

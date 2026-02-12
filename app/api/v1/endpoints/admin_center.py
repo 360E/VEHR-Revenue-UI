@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.core.deps import get_current_membership, require_permission
+from app.db.models.ringcentral_credential import RingCentralCredential
 from app.db.models.integration_account import IntegrationAccount
 from app.db.models.integration_token import IntegrationToken
 from app.db.models.organization import Organization
@@ -115,11 +116,21 @@ def integration_status(
         .order_by(IntegrationToken.provider.asc())
     ).all()
 
+    ringcentral_credential_count = db.execute(
+        select(func.count(RingCentralCredential.id)).where(
+            RingCentralCredential.organization_id == membership.organization_id
+        )
+    ).scalar_one()
+
     counts_by_provider: dict[str, int] = {}
     for provider, count in account_rows:
         counts_by_provider[provider] = counts_by_provider.get(provider, 0) + int(count)
     for provider, count in token_rows:
         counts_by_provider[provider] = counts_by_provider.get(provider, 0) + int(count)
+    if ringcentral_credential_count:
+        counts_by_provider["ringcentral"] = counts_by_provider.get("ringcentral", 0) + int(
+            ringcentral_credential_count
+        )
 
     items = [
         IntegrationStatusItemRead(provider=provider, connected_accounts=counts_by_provider[provider])

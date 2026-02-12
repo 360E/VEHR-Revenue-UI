@@ -30,6 +30,18 @@ class User(Base):
         "IntegrationAccount",
         back_populates="user",
     )
+    ringcentral_credentials: Mapped[list["RingCentralCredential"]] = relationship(
+        "RingCentralCredential",
+        back_populates="user",
+    )
+    ringcentral_subscriptions: Mapped[list["RingCentralSubscription"]] = relationship(
+        "RingCentralSubscription",
+        back_populates="user",
+    )
+    assigned_call_dispositions: Mapped[list["CallDisposition"]] = relationship(
+        "CallDisposition",
+        back_populates="assigned_to_user",
+    )
     password_reset_tokens: Mapped[list["PasswordResetToken"]] = relationship(
         "PasswordResetToken",
         back_populates="user",

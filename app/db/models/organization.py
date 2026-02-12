@@ -55,6 +55,22 @@ class Organization(Base):
         "IntegrationToken",
         back_populates="organization",
     )
+    ringcentral_credentials: Mapped[list["RingCentralCredential"]] = relationship(
+        "RingCentralCredential",
+        back_populates="organization",
+    )
+    ringcentral_subscriptions: Mapped[list["RingCentralSubscription"]] = relationship(
+        "RingCentralSubscription",
+        back_populates="organization",
+    )
+    call_dispositions: Mapped[list["CallDisposition"]] = relationship(
+        "CallDisposition",
+        back_populates="organization",
+    )
+    call_events: Mapped[list["CallEvent"]] = relationship(
+        "CallEvent",
+        back_populates="organization",
+    )
     ringcentral_events: Mapped[list["RingCentralEvent"]] = relationship(
         "RingCentralEvent",
         back_populates="organization",

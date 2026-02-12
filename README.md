@@ -260,12 +260,12 @@ RingCentral integration (OAuth + webhook)
 Required API env vars:
 
 - INTEGRATION_TOKEN_KEY
-- RINGCENTRAL_INTEGRATION_TOKEN_KEY (preferred for RingCentral token encryption)
 - RINGCENTRAL_CLIENT_ID
 - RINGCENTRAL_CLIENT_SECRET
 - RINGCENTRAL_SERVER_URL (default: https://platform.ringcentral.com)
 - RINGCENTRAL_REDIRECT_URI (example: https://api.360-encompass.com/api/v1/integrations/ringcentral/callback)
-- RINGCENTRAL_WEBHOOK_SECRET
+- RINGCENTRAL_WEBHOOK_SHARED_SECRET
+- PUBLIC_WEBHOOK_BASE_URL (example: https://api.360-encompass.com)
 
 Connect flow:
 
@@ -273,11 +273,13 @@ Connect flow:
 2. Open Admin Center and click `Connect RingCentral`.
 3. Complete OAuth consent in RingCentral.
 4. Confirm redirect back to frontend includes `?ringcentral=connected`.
-5. Verify `integration_tokens` has one `provider='ringcentral'` row for your organization.
+5. Verify `ringcentral_credentials` has one row for `(organization_id, user_id)`.
+6. Click `Ensure subscription` in Admin Center and confirm subscription shows `ACTIVE`.
 
 Webhook configuration:
 
 - Endpoint:
-  `https://api.360-encompass.com/api/v1/integrations/ringcentral/webhook?organization_id=<ORG_ID>&secret=<RINGCENTRAL_WEBHOOK_SECRET>`
+  `https://api.360-encompass.com/api/v1/integrations/ringcentral/webhook?organization_id=<ORG_ID>&secret=<RINGCENTRAL_WEBHOOK_SHARED_SECRET>`
 - Point RingCentral event subscriptions to this URL.
-- After a test call event, verify rows are created in `ringcentral_events`.
+- After a test call event, verify rows are created in `call_events` (and `ringcentral_events` legacy mirror).
+- Open `Calls & Reception` and confirm events appear without manual refresh (SSE stream).

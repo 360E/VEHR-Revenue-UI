@@ -12,7 +12,7 @@ from app.api.v1.endpoints import (
     health,
     integrations,
     integrations_microsoft,
-    integrations_ringcentral,
+    ringcentral_live,
     organization_home,
     organizations,
     paperwork,
@@ -46,7 +46,7 @@ api_router.include_router(clinical_audit.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(integrations.router)
 api_router.include_router(integrations_microsoft.router)
-api_router.include_router(integrations_ringcentral.router)
+api_router.include_router(ringcentral_live.router)
 api_router.include_router(services.router)
 api_router.include_router(sharepoint.router)
 api_router.include_router(staff.router)

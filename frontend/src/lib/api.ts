@@ -15,7 +15,7 @@ const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
 const CUTOVER_FRONTEND_HOSTS = new Set(["360-encompass.com", "www.360-encompass.com"]);
 const CUTOVER_API_BASE_URL = "https://api.360-encompass.com";
 
-function getApiBaseUrl() {
+export function getApiBaseUrl() {
   const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
   if (configured) {
     return configured;
@@ -29,7 +29,7 @@ function getApiBaseUrl() {
   return DEFAULT_API_BASE_URL;
 }
 
-function buildUrl(path: string) {
+export function buildUrl(path: string) {
   if (path.startsWith("http://") || path.startsWith("https://")) {
     return path;
   }

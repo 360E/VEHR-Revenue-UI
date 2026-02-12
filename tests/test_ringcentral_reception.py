@@ -7,10 +7,10 @@ from sqlalchemy.orm import sessionmaker
 from app.core.rbac import ROLE_RECEPTIONIST
 from app.core.security import create_access_token, hash_password
 from app.db.base import Base
-from app.db.models.integration_token import IntegrationToken
 from app.db.models.organization import Organization
 from app.db.models.organization_membership import OrganizationMembership
 from app.db.models.reception_call_workflow import ReceptionCallWorkflow
+from app.db.models.ringcentral_credential import RingCentralCredential
 from app.db.models.ringcentral_event import RingCentralEvent
 from app.db.models.task import Task
 from app.db.models.user import User
@@ -20,6 +20,19 @@ from app.main import app
 
 def _auth_header(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _set_required_env(monkeypatch) -> None:
+    monkeypatch.setenv("RINGCENTRAL_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("RINGCENTRAL_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("RINGCENTRAL_SERVER_URL", "https://platform.ringcentral.com")
+    monkeypatch.setenv(
+        "RINGCENTRAL_REDIRECT_URI",
+        "https://api.360-encompass.com/api/v1/integrations/ringcentral/callback",
+    )
+    monkeypatch.setenv("RINGCENTRAL_WEBHOOK_SHARED_SECRET", "webhook-secret-value")
+    monkeypatch.setenv("PUBLIC_WEBHOOK_BASE_URL", "https://api.360-encompass.com")
+    monkeypatch.setenv("INTEGRATION_TOKEN_KEY", "integration-token-key-for-tests")
 
 
 def _build_session(tmp_path):
@@ -68,13 +81,14 @@ def _seed_reception_user(session_factory) -> tuple[str, str]:
             )
         )
         db.add(
-            IntegrationToken(
+            RingCentralCredential(
                 organization_id=org.id,
-                provider="ringcentral",
+                user_id=user.id,
+                rc_account_id="acct-123",
+                rc_extension_id="ext-123",
                 access_token_enc="encrypted-access",
                 refresh_token_enc="encrypted-refresh",
-                account_id="acct-123",
-                extension_id="ext-123",
+                scopes="ReadAccounts ReadCallLog ReadPresence",
             )
         )
         db.commit()
@@ -82,7 +96,7 @@ def _seed_reception_user(session_factory) -> tuple[str, str]:
 
 
 def test_ringcentral_webhook_and_reception_flow(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("RINGCENTRAL_WEBHOOK_SECRET", "webhook-secret-value")
+    _set_required_env(monkeypatch)
     engine, session_factory = _build_session(tmp_path)
     try:
         receptionist_token, org_id = _seed_reception_user(session_factory)
@@ -178,7 +192,8 @@ def test_ringcentral_webhook_and_reception_flow(tmp_path, monkeypatch) -> None:
         engine.dispose()
 
 
-def test_ringcentral_webhook_validation_handshake(tmp_path) -> None:
+def test_ringcentral_webhook_validation_handshake(tmp_path, monkeypatch) -> None:
+    _set_required_env(monkeypatch)
     engine, _session_factory = _build_session(tmp_path)
     try:
         with TestClient(app) as client:
@@ -196,7 +211,7 @@ def test_ringcentral_webhook_validation_handshake(tmp_path) -> None:
 
 
 def test_ringcentral_webhook_resolves_org_without_query_param(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("RINGCENTRAL_WEBHOOK_SECRET", "webhook-secret-value")
+    _set_required_env(monkeypatch)
     engine, session_factory = _build_session(tmp_path)
     try:
         _receptionist_token, org_id = _seed_reception_user(session_factory)
@@ -236,7 +251,7 @@ def test_ringcentral_webhook_resolves_org_without_query_param(tmp_path, monkeypa
 
 
 def test_ringcentral_webhook_normalizes_noanswer_to_missed(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("RINGCENTRAL_WEBHOOK_SECRET", "webhook-secret-value")
+    _set_required_env(monkeypatch)
     engine, session_factory = _build_session(tmp_path)
     try:
         receptionist_token, org_id = _seed_reception_user(session_factory)
@@ -276,7 +291,7 @@ def test_ringcentral_webhook_normalizes_noanswer_to_missed(tmp_path, monkeypatch
 
 
 def test_ringcentral_webhook_ignores_owner_id_for_account_match(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("RINGCENTRAL_WEBHOOK_SECRET", "webhook-secret-value")
+    _set_required_env(monkeypatch)
     engine, session_factory = _build_session(tmp_path)
     try:
         _receptionist_token, org_id = _seed_reception_user(session_factory)
@@ -307,7 +322,7 @@ def test_ringcentral_webhook_ignores_owner_id_for_account_match(tmp_path, monkey
 
 
 def test_ringcentral_webhook_resolves_account_from_parties_payload(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("RINGCENTRAL_WEBHOOK_SECRET", "webhook-secret-value")
+    _set_required_env(monkeypatch)
     engine, session_factory = _build_session(tmp_path)
     try:
         _receptionist_token, org_id = _seed_reception_user(session_factory)

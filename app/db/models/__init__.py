@@ -3,6 +3,8 @@ from app.db.models.audit_event import AuditEvent  # noqa: F401
 from app.db.models.announcement import Announcement  # noqa: F401
 from app.db.models.clinical_audit_finding import ClinicalAuditFinding  # noqa: F401
 from app.db.models.clinical_audit_run import ClinicalAuditRun  # noqa: F401
+from app.db.models.call_disposition import CallDisposition  # noqa: F401
+from app.db.models.call_event import CallEvent  # noqa: F401
 from app.db.models.disclosure_log import DisclosureLog  # noqa: F401
 from app.db.models.document import Document  # noqa: F401
 from app.db.models.encounter import Encounter  # noqa: F401
@@ -33,6 +35,8 @@ from app.db.models.review_action import ReviewAction  # noqa: F401
 from app.db.models.review_evidence_link import ReviewEvidenceLink  # noqa: F401
 from app.db.models.review_queue_item import ReviewQueueItem  # noqa: F401
 from app.db.models.ringcentral_event import RingCentralEvent  # noqa: F401
+from app.db.models.ringcentral_credential import RingCentralCredential  # noqa: F401
+from app.db.models.ringcentral_subscription import RingCentralSubscription  # noqa: F401
 from app.db.models.reception_call_workflow import ReceptionCallWorkflow  # noqa: F401
 from app.db.models.service import Service  # noqa: F401
 from app.db.models.service_document_template import ServiceDocumentTemplate  # noqa: F401

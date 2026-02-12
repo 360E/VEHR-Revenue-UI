@@ -46,12 +46,12 @@ alembic upgrade head
 `MS_GRAPH_SCOPES` = `openid profile email offline_access User.Read Sites.Read.All Files.ReadWrite.All`  
 `MS_POST_CONNECT_REDIRECT` = `https://360-encompass.com/admin/integrations/microsoft`  
 `INTEGRATION_TOKEN_KEY` = secret used to encrypt refresh tokens at rest  
-`RINGCENTRAL_INTEGRATION_TOKEN_KEY` = secret used to encrypt RingCentral OAuth tokens at rest (preferred)  
 `RINGCENTRAL_CLIENT_ID` = RingCentral OAuth app client ID  
 `RINGCENTRAL_CLIENT_SECRET` = RingCentral OAuth app client secret  
 `RINGCENTRAL_SERVER_URL` = `https://platform.ringcentral.com`  
 `RINGCENTRAL_REDIRECT_URI` = `https://api.360-encompass.com/api/v1/integrations/ringcentral/callback`  
-`RINGCENTRAL_WEBHOOK_SECRET` = shared secret for webhook authentication  
+`RINGCENTRAL_WEBHOOK_SHARED_SECRET` = shared secret for webhook authentication  
+`PUBLIC_WEBHOOK_BASE_URL` = `https://api.360-encompass.com`  
 `RINGCENTRAL_POST_CONNECT_REDIRECT` = `https://360-encompass.com/admin-center` (optional)
 
 Notes:
@@ -83,11 +83,12 @@ Render supplies `PORT` automatically for the Docker container.
    - Confirm all RingCentral env vars above are set in API service config.
    - In Admin Center, open Integrations status and click **Connect RingCentral**.
    - Complete RingCentral consent and confirm redirect returns with `?ringcentral=connected`.
-   - Confirm a row exists in `integration_tokens` for `provider='ringcentral'` and your organization.
+   - Confirm a row exists in `ringcentral_credentials` for your `(organization_id, user_id)`.
+   - Click **Ensure subscription** and confirm status is `ACTIVE`.
    - Configure RingCentral webhook target URL:
-     `https://api.360-encompass.com/api/v1/integrations/ringcentral/webhook?organization_id=<ORG_ID>&secret=<RINGCENTRAL_WEBHOOK_SECRET>`
-   - Trigger a test call event and confirm rows are created in `ringcentral_events`.
-   - Open **Calls & Reception** and confirm call feed and presence load.
+     `https://api.360-encompass.com/api/v1/integrations/ringcentral/webhook?organization_id=<ORG_ID>&secret=<RINGCENTRAL_WEBHOOK_SHARED_SECRET>`
+   - Trigger a test call event and confirm rows are created in `call_events`.
+   - Open **Calls & Reception** and confirm call feed/presence update without manual refresh.
 
 Example bootstrap payload:
 ```json

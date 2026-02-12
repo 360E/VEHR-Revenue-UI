@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { ApiError, apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -34,14 +35,25 @@ type IntegrationStatus = {
 
 type RingCentralStatus = {
   connected: boolean;
+  organization_id: string;
+  user_id: string;
   scope?: string | null;
   account_id?: string | null;
   extension_id?: string | null;
   expires_at?: string | null;
+  subscription_status?: string | null;
+  subscription_expires_at?: string | null;
 };
 
 type RingCentralConnect = {
-  auth_url: string;
+  authorization_url?: string;
+  auth_url?: string;
+};
+
+type RingCentralEnsureSubscription = {
+  status: string;
+  rc_subscription_id?: string | null;
+  expires_at?: string | null;
 };
 
 function sortPermissions(values: string[]) {
@@ -56,6 +68,7 @@ function toMessage(error: unknown, fallback: string) {
 }
 
 export default function AdminCenterPage() {
+  const searchParams = useSearchParams();
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -71,6 +84,7 @@ export default function AdminCenterPage() {
   const [ringCentralStatus, setRingCentralStatus] = useState<RingCentralStatus | null>(null);
   const [ringCentralMessage, setRingCentralMessage] = useState<string | null>(null);
   const [isConnectingRingCentral, setIsConnectingRingCentral] = useState(false);
+  const [isEnsuringRingCentralSubscription, setIsEnsuringRingCentralSubscription] = useState(false);
   const [isDisconnectingRingCentral, setIsDisconnectingRingCentral] = useState(false);
 
   const [inviteEmail, setInviteEmail] = useState("");
@@ -129,6 +143,18 @@ export default function AdminCenterPage() {
   useEffect(() => {
     void loadAdminData();
   }, []);
+
+  useEffect(() => {
+    const ringCentralState = searchParams.get("ringcentral");
+    const reason = searchParams.get("reason");
+    if (ringCentralState === "connected") {
+      setRingCentralMessage("RingCentral connected.");
+      return;
+    }
+    if (ringCentralState === "error") {
+      setRingCentralMessage(reason ? `RingCentral error: ${reason}` : "RingCentral connection failed.");
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (!selectedRole) {
@@ -235,10 +261,31 @@ export default function AdminCenterPage() {
       const response = await apiFetch<RingCentralConnect>("/api/v1/integrations/ringcentral/connect", {
         method: "POST",
       });
-      window.location.assign(response.auth_url);
+      const redirectTarget = response.authorization_url || response.auth_url;
+      if (!redirectTarget) {
+        throw new Error("Missing authorization URL");
+      }
+      window.location.assign(redirectTarget);
     } catch (error) {
       setRingCentralMessage(toMessage(error, "Unable to start RingCentral connection."));
       setIsConnectingRingCentral(false);
+    }
+  }
+
+  async function handleEnsureRingCentralSubscription() {
+    setRingCentralMessage(null);
+    setIsEnsuringRingCentralSubscription(true);
+    try {
+      const response = await apiFetch<RingCentralEnsureSubscription>(
+        "/api/v1/integrations/ringcentral/ensure-subscription",
+        { method: "POST" },
+      );
+      setRingCentralMessage(`RingCentral subscription status: ${response.status}.`);
+      await loadAdminData();
+    } catch (error) {
+      setRingCentralMessage(toMessage(error, "Unable to ensure RingCentral subscription."));
+    } finally {
+      setIsEnsuringRingCentralSubscription(false);
     }
   }
 
@@ -337,10 +384,29 @@ export default function AdminCenterPage() {
                   </div>
                   {ringCentralStatus?.connected ? (
                     <p className="mt-2 text-xs text-slate-500">
-                      Account: {ringCentralStatus.account_id || "n/a"} · Extension:{" "}
+                      Account: {ringCentralStatus.account_id || "n/a"} - Extension:{" "}
                       {ringCentralStatus.extension_id || "n/a"}
                     </p>
                   ) : null}
+                  <p className="mt-1 text-xs text-slate-500">
+                    Subscription: {ringCentralStatus?.subscription_status || "MISSING"}
+                  </p>
+                  {ringCentralStatus?.subscription_expires_at ? (
+                    <p className="mt-1 text-xs text-slate-500">
+                      Subscription expires: {new Date(ringCentralStatus.subscription_expires_at).toLocaleString()}
+                    </p>
+                  ) : null}
+                  <div className="mt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-8 rounded-lg px-3"
+                      onClick={() => void handleEnsureRingCentralSubscription()}
+                      disabled={isEnsuringRingCentralSubscription || !ringCentralStatus?.connected}
+                    >
+                      {isEnsuringRingCentralSubscription ? "Checking..." : "Ensure subscription"}
+                    </Button>
+                  </div>
                 </div>
                 {integrationStatus?.items.length ? (
                   integrationStatus.items.map((item) => (
