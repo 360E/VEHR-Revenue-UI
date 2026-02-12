@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -17,6 +18,7 @@ from app.services.tanner_ai.service import (
 
 
 MAX_AUDIO_UPLOAD_BYTES = 20 * 1024 * 1024
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tanner-ai", tags=["Tanner AI"])
 
@@ -57,7 +59,20 @@ def get_tanner_service_dependency() -> TannerAIService:
     return get_tanner_ai_service()
 
 
-def _raise_service_error(exc: TannerAIServiceError) -> None:
+def _raise_service_error(
+    *,
+    route: str,
+    membership: OrganizationMembership,
+    exc: TannerAIServiceError,
+) -> None:
+    logger.warning(
+        "tanner_ai_request_failed route=%s org_id=%s user_id=%s status_code=%s detail=%s",
+        route,
+        membership.organization_id,
+        membership.user_id,
+        exc.status_code,
+        exc.detail,
+    )
     raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -69,7 +84,7 @@ def tanner_ai_health() -> TannerAIHealthResponse:
 @router.post("/transcribe", response_model=TranscriptionResponse)
 async def tanner_ai_transcribe(
     file: UploadFile = File(...),
-    _: OrganizationMembership = Depends(get_current_membership),
+    membership: OrganizationMembership = Depends(get_current_membership),
     service: TannerAIService = Depends(get_tanner_service_dependency),
 ) -> TranscriptionResponse:
     temp_path: str | None = None
@@ -89,7 +104,7 @@ async def tanner_ai_transcribe(
         transcript = service.transcribe_audio(temp_path)
         return TranscriptionResponse(transcript=transcript)
     except TannerAIServiceError as exc:
-        _raise_service_error(exc)
+        _raise_service_error(route="transcribe", membership=membership, exc=exc)
     except HTTPException:
         raise
     except Exception as exc:
@@ -106,13 +121,13 @@ async def tanner_ai_transcribe(
 @router.post("/generate", response_model=GenerateResponse)
 def tanner_ai_generate(
     payload: GenerateRequest,
-    _: OrganizationMembership = Depends(get_current_membership),
+    membership: OrganizationMembership = Depends(get_current_membership),
     service: TannerAIService = Depends(get_tanner_service_dependency),
 ) -> GenerateResponse:
     try:
         text = service.generate_text(payload.prompt, temperature=payload.temperature)
     except TannerAIServiceError as exc:
-        _raise_service_error(exc)
+        _raise_service_error(route="generate", membership=membership, exc=exc)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -124,13 +139,13 @@ def tanner_ai_generate(
 @router.post("/note")
 def tanner_ai_note(
     payload: StructuredNoteRequest,
-    _: OrganizationMembership = Depends(get_current_membership),
+    membership: OrganizationMembership = Depends(get_current_membership),
     service: TannerAIService = Depends(get_tanner_service_dependency),
 ) -> dict[str, str]:
     try:
         return service.generate_structured_note(payload.transcript, payload.note_type)
     except TannerAIServiceError as exc:
-        _raise_service_error(exc)
+        _raise_service_error(route="note", membership=membership, exc=exc)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -141,13 +156,13 @@ def tanner_ai_note(
 @router.post("/assistant", response_model=AssistantResponse)
 def tanner_ai_assistant(
     payload: AssistantRequest,
-    _: OrganizationMembership = Depends(get_current_membership),
+    membership: OrganizationMembership = Depends(get_current_membership),
     service: TannerAIService = Depends(get_tanner_service_dependency),
 ) -> AssistantResponse:
     try:
         reply = service.assistant_reply(payload.message, payload.context)
     except TannerAIServiceError as exc:
-        _raise_service_error(exc)
+        _raise_service_error(route="assistant", membership=membership, exc=exc)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

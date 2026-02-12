@@ -8,6 +8,8 @@ from typing import Any
 import httpx
 from openai import (
     APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
     AuthenticationError,
     BadRequestError,
     NotFoundError,
@@ -88,8 +90,26 @@ def _parse_json_object(raw_text: str) -> dict[str, Any]:
     return parsed
 
 
+def _extract_openai_error_code(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    error_payload = payload.get("error")
+    if not isinstance(error_payload, dict):
+        return None
+
+    for key in ("code", "type"):
+        value = error_payload.get(key)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized:
+                return normalized
+    return None
+
+
 def _map_openai_exception(exc: Exception, *, phase: str) -> TannerAIServiceError:
     prefix = f"tanner_ai_{phase}"
+    if isinstance(exc, APITimeoutError):
+        return TannerAIServiceError(f"{prefix}_timeout", status_code=503)
     if isinstance(exc, AuthenticationError):
         return TannerAIServiceError(f"{prefix}_auth_failed", status_code=503)
     if isinstance(exc, PermissionDeniedError):
@@ -102,19 +122,44 @@ def _map_openai_exception(exc: Exception, *, phase: str) -> TannerAIServiceError
         return TannerAIServiceError(f"{prefix}_connection_failed", status_code=503)
     if isinstance(exc, BadRequestError):
         return TannerAIServiceError(f"{prefix}_bad_request", status_code=502)
+    if isinstance(exc, APIStatusError):
+        status_code = getattr(exc, "status_code", None)
+        payload = getattr(exc, "body", None)
+        error_code = _extract_openai_error_code(payload)
+        if isinstance(status_code, int):
+            return _map_openai_http_status(status_code, phase=phase, error_code=error_code)
+        return TannerAIServiceError(f"{prefix}_failed", status_code=503)
     return TannerAIServiceError(f"{prefix}_failed", status_code=503)
 
 
-def _map_openai_http_status(status_code: int, *, phase: str) -> TannerAIServiceError:
+def _map_openai_http_status(
+    status_code: int,
+    *,
+    phase: str,
+    error_code: str | None = None,
+) -> TannerAIServiceError:
     prefix = f"tanner_ai_{phase}"
+    normalized_code = (error_code or "").strip().lower()
+
+    if normalized_code in {"insufficient_quota", "quota_exceeded"}:
+        return TannerAIServiceError(f"{prefix}_quota_exceeded", status_code=503)
+    if normalized_code in {"invalid_api_key", "auth_subrequest_error"}:
+        return TannerAIServiceError(f"{prefix}_auth_failed", status_code=503)
+    if normalized_code in {"model_not_found"}:
+        return TannerAIServiceError(f"{prefix}_model_not_found", status_code=503)
+
     if status_code in {401, 403}:
         return TannerAIServiceError(f"{prefix}_auth_failed", status_code=503)
     if status_code == 404:
         return TannerAIServiceError(f"{prefix}_model_not_found", status_code=503)
     if status_code == 429:
         return TannerAIServiceError(f"{prefix}_rate_limited", status_code=503)
+    if status_code in {408, 504}:
+        return TannerAIServiceError(f"{prefix}_timeout", status_code=503)
     if 400 <= status_code < 500:
         return TannerAIServiceError(f"{prefix}_bad_request", status_code=502)
+    if status_code >= 500:
+        return TannerAIServiceError(f"{prefix}_upstream_unavailable", status_code=503)
     return TannerAIServiceError(f"{prefix}_failed", status_code=503)
 
 
@@ -148,11 +193,20 @@ class TannerAIService:
         except Exception as exc:
             raise TannerAIServiceError("tanner_ai_generation_connection_failed", status_code=503) from exc
 
+        parsed_body: Any = None
         if response.status_code >= 400:
-            raise _map_openai_http_status(response.status_code, phase="generation")
+            try:
+                parsed_body = response.json()
+            except Exception:
+                parsed_body = None
+            raise _map_openai_http_status(
+                response.status_code,
+                phase="generation",
+                error_code=_extract_openai_error_code(parsed_body),
+            )
 
         try:
-            body = response.json()
+            body = parsed_body if isinstance(parsed_body, dict) else response.json()
         except Exception as exc:
             raise TannerAIServiceError("tanner_ai_generation_invalid_response", status_code=503) from exc
 
@@ -241,7 +295,16 @@ class TannerAIService:
                             files=files,
                         )
                 if http_response.status_code >= 400:
-                    raise _map_openai_http_status(http_response.status_code, phase="transcription")
+                    error_payload: Any = None
+                    try:
+                        error_payload = http_response.json()
+                    except Exception:
+                        error_payload = None
+                    raise _map_openai_http_status(
+                        http_response.status_code,
+                        phase="transcription",
+                        error_code=_extract_openai_error_code(error_payload),
+                    )
                 try:
                     payload = http_response.json()
                 except Exception as parse_exc:
@@ -348,7 +411,7 @@ class TannerAIService:
         if context and context.strip():
             messages.append({"role": "system", "content": f"Context: {context.strip()}"})
         messages.append({"role": "user", "content": cleaned_message})
-        return self._chat_completion(messages=messages, temperature=0.2, phase="generation")
+        return self._chat_completion(messages=messages, temperature=0.2, phase="assistant")
 
 
 _service_instance: TannerAIService | None = None
