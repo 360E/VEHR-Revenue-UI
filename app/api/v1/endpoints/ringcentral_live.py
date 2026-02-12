@@ -185,8 +185,12 @@ def _callback_redirect_url(*, return_to: str, connected: bool, err: str | None =
         return_to = "https://360-encompass.com/admin-center"
     separator = "&" if "?" in return_to else "?"
     payload = {"connected": "1" if connected else "0"}
+    # Backward-compatible keys for older frontend builds.
+    payload["ringcentral"] = "connected" if connected else "error"
     if err and not connected:
-        payload["err"] = _sanitize_reason(err)
+        sanitized = _sanitize_reason(err)
+        payload["err"] = sanitized
+        payload["reason"] = sanitized
     return f"{return_to}{separator}{urlencode(payload)}"
 
 
