@@ -26,8 +26,40 @@ def _index_exists(inspector, table_name: str, index_name: str) -> bool:
 
 def upgrade() -> None:
     bind = op.get_bind()
-    inspector = sa.inspect(bind)
+    dialect = bind.dialect.name
 
+    # Use IF NOT EXISTS to avoid deploy-time collisions when a prior failed/parallel run
+    # already created some objects.
+    if dialect in {"postgresql", "sqlite"}:
+        op.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                id VARCHAR(36) NOT NULL PRIMARY KEY,
+                organization_id VARCHAR(36) NOT NULL,
+                user_id VARCHAR(36) NOT NULL,
+                last_active_module VARCHAR(64),
+                sidebar_collapsed BOOLEAN DEFAULT 0 NOT NULL,
+                copilot_enabled BOOLEAN DEFAULT 1 NOT NULL,
+                created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                CONSTRAINT uq_user_preferences_org_user UNIQUE (organization_id, user_id),
+                FOREIGN KEY(organization_id) REFERENCES organizations (id),
+                FOREIGN KEY(user_id) REFERENCES users (id)
+            )
+            """
+        )
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS ix_user_preferences_organization_id ON user_preferences (organization_id)"
+        )
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS ix_user_preferences_user_id ON user_preferences (user_id)"
+        )
+        op.execute(
+            "CREATE INDEX IF NOT EXISTS ix_user_preferences_last_active_module ON user_preferences (last_active_module)"
+        )
+        return
+
+    inspector = sa.inspect(bind)
     if _table_exists(inspector, "user_preferences"):
         return
 
@@ -46,27 +78,34 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("organization_id", "user_id", name="uq_user_preferences_org_user"),
     )
-    op.create_index("ix_user_preferences_organization_id", "user_preferences", ["organization_id"])
-    op.create_index("ix_user_preferences_user_id", "user_preferences", ["user_id"])
-    op.create_index("ix_user_preferences_last_active_module", "user_preferences", ["last_active_module"])
+    inspector = sa.inspect(bind)
+    if not _index_exists(inspector, "user_preferences", "ix_user_preferences_organization_id"):
+        op.create_index("ix_user_preferences_organization_id", "user_preferences", ["organization_id"])
+    if not _index_exists(inspector, "user_preferences", "ix_user_preferences_user_id"):
+        op.create_index("ix_user_preferences_user_id", "user_preferences", ["user_id"])
+    if not _index_exists(inspector, "user_preferences", "ix_user_preferences_last_active_module"):
+        op.create_index("ix_user_preferences_last_active_module", "user_preferences", ["last_active_module"])
 
 
 def downgrade() -> None:
     bind = op.get_bind()
-    inspector = sa.inspect(bind)
+    dialect = bind.dialect.name
 
+    if dialect in {"postgresql", "sqlite"}:
+        op.execute("DROP INDEX IF EXISTS ix_user_preferences_last_active_module")
+        op.execute("DROP INDEX IF EXISTS ix_user_preferences_user_id")
+        op.execute("DROP INDEX IF EXISTS ix_user_preferences_organization_id")
+        op.execute("DROP TABLE IF EXISTS user_preferences")
+        return
+
+    inspector = sa.inspect(bind)
     if not _table_exists(inspector, "user_preferences"):
         return
 
     if _index_exists(inspector, "user_preferences", "ix_user_preferences_last_active_module"):
         op.drop_index("ix_user_preferences_last_active_module", table_name="user_preferences")
-
-    inspector = sa.inspect(bind)
     if _index_exists(inspector, "user_preferences", "ix_user_preferences_user_id"):
         op.drop_index("ix_user_preferences_user_id", table_name="user_preferences")
-
-    inspector = sa.inspect(bind)
     if _index_exists(inspector, "user_preferences", "ix_user_preferences_organization_id"):
         op.drop_index("ix_user_preferences_organization_id", table_name="user_preferences")
-
     op.drop_table("user_preferences")
