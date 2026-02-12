@@ -290,10 +290,13 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <header className="border-b border-slate-200 px-4 py-3 sm:px-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+                <Link
+                  href="/directory"
+                  className="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold tracking-tight text-slate-800 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                >
                   {BRANDING.name}
-                </div>
-                <div className="truncate text-lg font-semibold tracking-tight text-slate-900">{topTitle}</div>
+                </Link>
+                <div className="mt-2 truncate text-lg font-semibold tracking-tight text-slate-900">{topTitle}</div>
               </div>
 
               <div className="flex items-center gap-2">

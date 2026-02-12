@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 
 import { ApiError, apiFetch } from "@/lib/api";
 import { persistAccessToken } from "@/lib/auth";
-import { fetchMePreferences, resolvePostLoginRoute } from "@/lib/preferences";
 
 type TokenResponse = {
   access_token: string;
@@ -23,16 +22,8 @@ type MeResponse = {
   organization_id: string;
 };
 
-function resolveNextPath(value: string | null): string | null {
-  if (!value || !value.startsWith("/")) {
-    return null;
-  }
-  return value;
-}
-
 export default function LoginPage() {
   const router = useRouter();
-  const [requestedNextPath, setRequestedNextPath] = useState<string | null>(null);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -44,18 +35,13 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setRequestedNextPath(resolveNextPath(new URLSearchParams(window.location.search).get("next")));
-  }, []);
-
-  useEffect(() => {
     let isMounted = true;
 
     async function checkExistingSession() {
       try {
         await apiFetch<MeResponse>("/api/v1/auth/me", { cache: "no-store" });
-        const preferences = await fetchMePreferences();
         if (!isMounted) return;
-        router.replace(resolvePostLoginRoute(preferences, requestedNextPath));
+        router.replace("/directory");
       } catch {
         if (!isMounted) return;
       } finally {
@@ -69,7 +55,7 @@ export default function LoginPage() {
     return () => {
       isMounted = false;
     };
-  }, [requestedNextPath, router]);
+  }, [router]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -103,8 +89,7 @@ export default function LoginPage() {
       });
 
       persistAccessToken(response.access_token);
-      const preferences = await fetchMePreferences();
-      router.replace(resolvePostLoginRoute(preferences, requestedNextPath));
+      router.replace("/directory");
     } catch (submitError) {
       const message = submitError instanceof ApiError || submitError instanceof Error
         ? submitError.message || "Login failed."
