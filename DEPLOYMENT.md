@@ -46,6 +46,7 @@ alembic upgrade head
 `MS_GRAPH_SCOPES` = `openid profile email offline_access User.Read Sites.Read.All Files.ReadWrite.All`  
 `MS_POST_CONNECT_REDIRECT` = `https://360-encompass.com/admin/integrations/microsoft`  
 `INTEGRATION_TOKEN_KEY` = secret used to encrypt refresh tokens at rest  
+`RINGCENTRAL_INTEGRATION_TOKEN_KEY` = secret used to encrypt RingCentral OAuth tokens at rest (preferred)  
 `RINGCENTRAL_CLIENT_ID` = RingCentral OAuth app client ID  
 `RINGCENTRAL_CLIENT_SECRET` = RingCentral OAuth app client secret  
 `RINGCENTRAL_SERVER_URL` = `https://platform.ringcentral.com`  

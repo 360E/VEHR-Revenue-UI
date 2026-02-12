@@ -260,6 +260,7 @@ RingCentral integration (OAuth + webhook)
 Required API env vars:
 
 - INTEGRATION_TOKEN_KEY
+- RINGCENTRAL_INTEGRATION_TOKEN_KEY (preferred for RingCentral token encryption)
 - RINGCENTRAL_CLIENT_ID
 - RINGCENTRAL_CLIENT_SECRET
 - RINGCENTRAL_SERVER_URL (default: https://platform.ringcentral.com)

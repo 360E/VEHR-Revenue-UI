@@ -133,7 +133,7 @@ def test_ringcentral_callback_stores_encrypted_tokens(tmp_path, monkeypatch) -> 
         "https://api.360-encompass.com/api/v1/integrations/ringcentral/callback",
     )
     monkeypatch.setenv("RINGCENTRAL_POST_CONNECT_REDIRECT", "https://360-encompass.com/admin-center")
-    monkeypatch.setenv("INTEGRATION_TOKEN_KEY", "ringcentral-token-encryption-test-key")
+    monkeypatch.setenv("RINGCENTRAL_INTEGRATION_TOKEN_KEY", "ringcentral-token-encryption-test-key")
 
     engine, session_factory = _build_session(tmp_path)
     try:

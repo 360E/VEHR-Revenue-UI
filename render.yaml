@@ -38,6 +38,8 @@ services:
         value: "true"
       - key: INTEGRATION_TOKEN_KEY
         sync: false
+      - key: RINGCENTRAL_INTEGRATION_TOKEN_KEY
+        sync: false
       - key: RINGCENTRAL_CLIENT_ID
         value: 5XvBxFN98oMfWMhTC0wn0s
       - key: RINGCENTRAL_CLIENT_SECRET

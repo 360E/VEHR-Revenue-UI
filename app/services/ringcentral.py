@@ -18,6 +18,8 @@ from app.services.integration_tokens import TokenEncryptionError, decrypt_token,
 
 
 RINGCENTRAL_PROVIDER = "ringcentral"
+RINGCENTRAL_TOKEN_KEY_ENV = "RINGCENTRAL_INTEGRATION_TOKEN_KEY"
+LEGACY_RINGCENTRAL_TOKEN_KEY_ENV = "INTEGRATION_TOKEN_KEY"
 RINGCENTRAL_STATE_TOKEN_TYPE = "ringcentral_oauth_state"
 RINGCENTRAL_STATE_TTL_MINUTES = 10
 
@@ -297,8 +299,16 @@ def upsert_ringcentral_token(
     token_payload: RingCentralTokenPayload,
 ) -> IntegrationToken:
     try:
-        access_token_enc = encrypt_token(token_payload.access_token)
-        refresh_token_enc = encrypt_token(token_payload.refresh_token)
+        access_token_enc = encrypt_token(
+            token_payload.access_token,
+            key_env=RINGCENTRAL_TOKEN_KEY_ENV,
+            fallback_env=LEGACY_RINGCENTRAL_TOKEN_KEY_ENV,
+        )
+        refresh_token_enc = encrypt_token(
+            token_payload.refresh_token,
+            key_env=RINGCENTRAL_TOKEN_KEY_ENV,
+            fallback_env=LEGACY_RINGCENTRAL_TOKEN_KEY_ENV,
+        )
     except TokenEncryptionError as exc:
         raise RingCentralIntegrationError(str(exc), 500) from exc
 
@@ -372,12 +382,23 @@ def resolve_access_token_for_org(
 
     if not should_refresh:
         try:
-            return decrypt_token(row.access_token_enc), row
+            return (
+                decrypt_token(
+                    row.access_token_enc,
+                    key_env=RINGCENTRAL_TOKEN_KEY_ENV,
+                    fallback_env=LEGACY_RINGCENTRAL_TOKEN_KEY_ENV,
+                ),
+                row,
+            )
         except TokenEncryptionError as exc:
             raise RingCentralIntegrationError(str(exc), 500) from exc
 
     try:
-        decrypted_refresh_token = decrypt_token(row.refresh_token_enc)
+        decrypted_refresh_token = decrypt_token(
+            row.refresh_token_enc,
+            key_env=RINGCENTRAL_TOKEN_KEY_ENV,
+            fallback_env=LEGACY_RINGCENTRAL_TOKEN_KEY_ENV,
+        )
     except TokenEncryptionError as exc:
         raise RingCentralIntegrationError(str(exc), 500) from exc
 
