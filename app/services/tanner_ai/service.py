@@ -5,13 +5,25 @@ import os
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
+import httpx
+from openai import (
+    APIConnectionError,
+    AuthenticationError,
+    BadRequestError,
+    NotFoundError,
+    OpenAI,
+    PermissionDeniedError,
+    RateLimitError,
+)
 
 
 TRANSCRIPTION_MODEL = "whisper-1"
 GENERATION_MODEL = "gpt-4o"
 GENERATION_FALLBACK_MODEL = "gpt-4o-mini"
 ALLOWED_NOTE_TYPES = {"SOAP", "DAP", "CUSTOM"}
+OPENAI_CHAT_API_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_TRANSCRIBE_API_URL = "https://api.openai.com/v1/audio/transcriptions"
+OPENAI_TIMEOUT_SECONDS = 45
 
 
 class TannerAIConfigurationError(RuntimeError):
@@ -76,17 +88,95 @@ def _parse_json_object(raw_text: str) -> dict[str, Any]:
     return parsed
 
 
+def _map_openai_exception(exc: Exception, *, phase: str) -> TannerAIServiceError:
+    prefix = f"tanner_ai_{phase}"
+    if isinstance(exc, AuthenticationError):
+        return TannerAIServiceError(f"{prefix}_auth_failed", status_code=503)
+    if isinstance(exc, PermissionDeniedError):
+        return TannerAIServiceError(f"{prefix}_permission_denied", status_code=503)
+    if isinstance(exc, RateLimitError):
+        return TannerAIServiceError(f"{prefix}_rate_limited", status_code=503)
+    if isinstance(exc, NotFoundError):
+        return TannerAIServiceError(f"{prefix}_model_not_found", status_code=503)
+    if isinstance(exc, APIConnectionError):
+        return TannerAIServiceError(f"{prefix}_connection_failed", status_code=503)
+    if isinstance(exc, BadRequestError):
+        return TannerAIServiceError(f"{prefix}_bad_request", status_code=502)
+    return TannerAIServiceError(f"{prefix}_failed", status_code=503)
+
+
+def _map_openai_http_status(status_code: int, *, phase: str) -> TannerAIServiceError:
+    prefix = f"tanner_ai_{phase}"
+    if status_code in {401, 403}:
+        return TannerAIServiceError(f"{prefix}_auth_failed", status_code=503)
+    if status_code == 404:
+        return TannerAIServiceError(f"{prefix}_model_not_found", status_code=503)
+    if status_code == 429:
+        return TannerAIServiceError(f"{prefix}_rate_limited", status_code=503)
+    if 400 <= status_code < 500:
+        return TannerAIServiceError(f"{prefix}_bad_request", status_code=502)
+    return TannerAIServiceError(f"{prefix}_failed", status_code=503)
+
+
 class TannerAIService:
     def __init__(self, *, api_key: str | None = None, client: OpenAI | None = None) -> None:
         key = (api_key or os.getenv("OPENAI_API_KEY", "")).strip()
         if not key:
             raise TannerAIConfigurationError("OPENAI_API_KEY is not configured")
+        self._api_key = key
         self._client = client or OpenAI(api_key=key)
 
-    def _chat_completion(self, *, messages: list[dict[str, str]], temperature: float) -> str:
-        model_candidates = [GENERATION_MODEL, GENERATION_FALLBACK_MODEL]
+    def _chat_completion_http(
+        self,
+        *,
+        model_name: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+    ) -> str:
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        try:
+            with httpx.Client(timeout=OPENAI_TIMEOUT_SECONDS) as client:
+                response = client.post(OPENAI_CHAT_API_URL, headers=headers, json=payload)
+        except Exception as exc:
+            raise TannerAIServiceError("tanner_ai_generation_connection_failed", status_code=503) from exc
+
+        if response.status_code >= 400:
+            raise _map_openai_http_status(response.status_code, phase="generation")
+
+        try:
+            body = response.json()
+        except Exception as exc:
+            raise TannerAIServiceError("tanner_ai_generation_invalid_response", status_code=503) from exc
+
+        content = (
+            body.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        text = _extract_text_content(content)
+        if not text:
+            raise TannerAIServiceError("tanner_ai_empty_response", status_code=502)
+        return text
+
+    def _chat_completion(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        temperature: float,
+        phase: str,
+    ) -> str:
+        configured_primary = os.getenv("TANNER_AI_CHAT_MODEL", "").strip() or GENERATION_MODEL
+        model_candidates = [configured_primary, GENERATION_FALLBACK_MODEL]
         seen_models: set[str] = set()
-        last_error: Exception | None = None
+        last_error: TannerAIServiceError | None = None
 
         for model_name in model_candidates:
             normalized = model_name.strip()
@@ -100,8 +190,16 @@ class TannerAIService:
                     temperature=temperature,
                 )
             except Exception as exc:
-                last_error = exc
-                continue
+                last_error = _map_openai_exception(exc, phase=phase)
+                try:
+                    return self._chat_completion_http(
+                        model_name=normalized,
+                        messages=messages,
+                        temperature=temperature,
+                    )
+                except TannerAIServiceError as http_error:
+                    last_error = http_error
+                    continue
 
             if not response.choices:
                 continue
@@ -112,7 +210,7 @@ class TannerAIService:
                 return text
 
         if last_error is not None:
-            raise TannerAIServiceError("tanner_ai_generation_failed", status_code=503) from last_error
+            raise last_error
         raise TannerAIServiceError("tanner_ai_empty_response", status_code=502)
 
     def transcribe_audio(self, file_path: str) -> str:
@@ -127,7 +225,34 @@ class TannerAIService:
                     file=audio_file,
                 )
         except Exception as exc:
-            raise TannerAIServiceError("tanner_ai_transcription_failed", status_code=503) from exc
+            mapped = _map_openai_exception(exc, phase="transcription")
+            try:
+                with path.open("rb") as audio_file:
+                    files = {
+                        "file": (path.name, audio_file, "application/octet-stream"),
+                    }
+                    data = {"model": TRANSCRIPTION_MODEL}
+                    headers = {"Authorization": f"Bearer {self._api_key}"}
+                    with httpx.Client(timeout=OPENAI_TIMEOUT_SECONDS) as client:
+                        http_response = client.post(
+                            OPENAI_TRANSCRIBE_API_URL,
+                            headers=headers,
+                            data=data,
+                            files=files,
+                        )
+                if http_response.status_code >= 400:
+                    raise _map_openai_http_status(http_response.status_code, phase="transcription")
+                try:
+                    payload = http_response.json()
+                except Exception as parse_exc:
+                    raise TannerAIServiceError("tanner_ai_transcription_invalid_response", status_code=503) from parse_exc
+                transcript = _extract_text_content(payload.get("text", ""))
+                cleaned = " ".join(transcript.split())
+                if not cleaned:
+                    raise TannerAIServiceError("tanner_ai_transcription_empty", status_code=502)
+                return cleaned
+            except TannerAIServiceError as http_error:
+                raise http_error from mapped
 
         transcript = _extract_text_content(getattr(response, "text", ""))
         if not transcript and isinstance(response, dict):
@@ -155,6 +280,7 @@ class TannerAIService:
                 {"role": "user", "content": cleaned_prompt},
             ],
             temperature=temperature,
+            phase="generation",
         )
 
     def generate_structured_note(self, transcript: str, note_type: str) -> dict[str, str]:
@@ -192,6 +318,7 @@ class TannerAIService:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.0,
+            phase="note",
         )
         parsed = _parse_json_object(raw)
 
@@ -221,7 +348,7 @@ class TannerAIService:
         if context and context.strip():
             messages.append({"role": "system", "content": f"Context: {context.strip()}"})
         messages.append({"role": "user", "content": cleaned_message})
-        return self._chat_completion(messages=messages, temperature=0.2)
+        return self._chat_completion(messages=messages, temperature=0.2, phase="generation")
 
 
 _service_instance: TannerAIService | None = None
