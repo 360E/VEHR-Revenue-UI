@@ -2,32 +2,32 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Bell, Brain, CircleDollarSign, Search } from "lucide-react";
 
+import MetricCard from "../_components/MetricCard";
 import { DataListRow } from "@/components/enterprise/data-list-row";
-import { PageShell } from "@/components/enterprise/page-shell";
 import { SectionCard } from "@/components/enterprise/section-card";
 import { SidebarNav, type SidebarNavGroup } from "@/components/enterprise/sidebar-nav";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { ApiError, apiFetch } from "@/lib/api";
+import { BRANDING } from "@/lib/branding";
 import {
-  TEAM_LABELS,
-  completeTask,
   createTask,
   listTasks,
-  loadTaskCalendar,
   taskDueBucket,
-  taskPermissionsForRole,
   taskScopeOptionsForRole,
   type TaskPriority,
   type TaskRecord,
   type TaskScope,
 } from "@/lib/tasks";
 
-import MetricCard from "../_components/MetricCard";
-
 type ClientRecord = {
   id: string;
+  first_name?: string | null;
+  last_name?: string | null;
 };
 
 type MeResponse = {
@@ -38,6 +38,28 @@ type MeResponse = {
   organization_id: string;
 };
 
+type AuditSummaryResponse = {
+  window_hours: number;
+  total_events: number;
+};
+
+type AuditAnomaly = {
+  kind: string;
+  severity: string;
+  description: string;
+  sample_time: string;
+  related_actor?: string | null;
+};
+
+type AuditEvent = {
+  id: string;
+  actor?: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  created_at: string;
+};
+
 type TaskCreateFormState = {
   title: string;
   description: string;
@@ -45,8 +67,30 @@ type TaskCreateFormState = {
   priority: TaskPriority;
 };
 
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const REFERRALS_PLACEHOLDER_COUNT = 14;
+type ClientRiskAlert = {
+  id: string;
+  clientId?: string;
+  displayName: string;
+  reason: string;
+  severityLabel: string;
+  severityTone: "critical" | "attention" | "informational";
+  isPlaceholder?: boolean;
+};
+
+type RevenueSignal = {
+  id: string;
+  label: string;
+  countLabel: string;
+  detail: string;
+  tone: "critical" | "attention" | "informational";
+};
+
+type ComplianceFeedItem = {
+  id: string;
+  summary: string;
+  metadata: string;
+  createdAt: string;
+};
 
 const DEFAULT_CREATE_FORM: TaskCreateFormState = {
   title: "",
@@ -55,317 +99,475 @@ const DEFAULT_CREATE_FORM: TaskCreateFormState = {
   priority: "normal",
 };
 
-function toMessage(error: unknown, fallback: string): string {
+function toErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiError || error instanceof Error) {
     return error.message || fallback;
   }
   return fallback;
 }
 
-function toDayKey(value: Date): string {
-  const year = value.getFullYear();
-  const month = `${value.getMonth() + 1}`.padStart(2, "0");
-  const day = `${value.getDate()}`.padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function startOfWeek(value: Date): Date {
-  const copy = new Date(value.getFullYear(), value.getMonth(), value.getDate());
-  copy.setDate(copy.getDate() - copy.getDay());
-  return copy;
-}
-
-function addDays(value: Date, amount: number): Date {
-  const copy = new Date(value);
-  copy.setDate(copy.getDate() + amount);
-  return copy;
-}
-
 function toIsoOrNull(localDateTime: string): string | null {
   if (!localDateTime) {
     return null;
   }
-  const asDate = new Date(localDateTime);
-  if (Number.isNaN(asDate.getTime())) {
+  const parsed = new Date(localDateTime);
+  if (Number.isNaN(parsed.getTime())) {
     return null;
   }
-  return asDate.toISOString();
+  return parsed.toISOString();
 }
 
-function formatDueAt(dueAt: string | null | undefined): string {
-  if (!dueAt) {
-    return "No due date";
-  }
-  const asDate = new Date(dueAt);
-  if (Number.isNaN(asDate.getTime())) {
-    return "No due date";
-  }
-  return asDate.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+function roleLabel(role?: string | null): string {
+  if (!role) return "Staff";
+  return role
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
-function formatStatusLabel(status: TaskRecord["status"]): string {
-  if (status === "in_progress") {
-    return "In Progress";
-  }
-  if (status === "done") {
-    return "Done";
-  }
-  if (status === "canceled") {
-    return "Canceled";
-  }
-  return "Open";
+function fullNameForClient(client: ClientRecord): string {
+  const first = (client.first_name ?? "").trim();
+  const last = (client.last_name ?? "").trim();
+  const combined = `${first} ${last}`.trim();
+  if (combined) return combined;
+  return `Client ${client.id.slice(0, 8)}`;
 }
 
-function taskStatusTone(task: TaskRecord): "critical" | "attention" | "stable" | "informational" {
-  if (task.status === "done") {
-    return "stable";
+function initialsFromName(value: string): string {
+  const parts = value.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0].slice(0, 1)}${parts[1].slice(0, 1)}`.toUpperCase();
   }
-  if (task.status === "canceled") {
-    return "informational";
-  }
-  const bucket = taskDueBucket(task.due_at);
-  if (bucket === "overdue") {
-    return "critical";
-  }
-  if (bucket === "today") {
-    return "attention";
-  }
+  return value.slice(0, 2).toUpperCase();
+}
+
+function severityToneFromTask(task: TaskRecord): "critical" | "attention" | "informational" {
+  if (task.priority === "urgent") return "critical";
+  const dueBucket = taskDueBucket(task.due_at);
+  if (dueBucket === "overdue") return "critical";
+  if (task.priority === "high" || dueBucket === "today") return "attention";
   return "informational";
 }
 
-function priorityLabel(priority: TaskPriority): string {
-  if (priority === "urgent") return "Urgent";
-  if (priority === "high") return "High";
-  if (priority === "low") return "Low";
-  return "Normal";
+function severityLabelFromTask(task: TaskRecord): string {
+  const dueBucket = taskDueBucket(task.due_at);
+  if (task.priority === "urgent" || dueBucket === "overdue") return "Critical";
+  if (task.priority === "high" || dueBucket === "today") return "Attention";
+  return "Monitor";
+}
+
+function severityChipClass(tone: "critical" | "attention" | "informational"): string {
+  if (tone === "critical") return "ui-status-error";
+  if (tone === "attention") return "ui-status-warning";
+  return "ui-status-info";
+}
+
+function humanizeToken(token: string): string {
+  const normalized = token.replace(/[._-]+/g, " ").trim();
+  if (!normalized) return "activity";
+  return normalized
+    .split(/\s+/)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function describeAuditAction(event: AuditEvent): string {
+  const actor = event.actor?.trim() ? event.actor.trim() : "A team member";
+  const actionLower = event.action.toLowerCase();
+  const entity = humanizeToken(event.entity_type);
+
+  if (actionLower.includes("create") || actionLower.includes("add")) {
+    return `${actor} created a ${entity} record.`;
+  }
+  if (actionLower.includes("update") || actionLower.includes("edit") || actionLower.includes("patch")) {
+    return `${actor} updated a ${entity} record.`;
+  }
+  if (actionLower.includes("delete") || actionLower.includes("remove")) {
+    return `${actor} removed a ${entity} record.`;
+  }
+  if (actionLower.includes("upload")) {
+    return `${actor} uploaded a ${entity} document.`;
+  }
+  if (actionLower.includes("dispatch") || actionLower.includes("send")) {
+    return `${actor} sent a ${entity} update.`;
+  }
+  return `${actor} recorded activity on ${entity}.`;
+}
+
+function describeAnomaly(anomaly: AuditAnomaly): string {
+  if (anomaly.kind === "burst_activity") {
+    return "Compliance monitor detected unusual audit volume in a short window.";
+  }
+  if (anomaly.kind === "after_hours_write") {
+    return "Compliance monitor detected after-hours write activity requiring review.";
+  }
+  if (anomaly.kind === "high_risk_action") {
+    return "Compliance monitor flagged a high-risk operational action for follow-up.";
+  }
+  return anomaly.description || "Compliance monitor flagged a policy-sensitive event.";
+}
+
+function formatMetaTime(value: string): string {
+  const stamp = new Date(value);
+  if (Number.isNaN(stamp.getTime())) return "Time unavailable";
+  return stamp.toLocaleString();
+}
+
+function matchesSearch(query: string, values: Array<string | undefined>): boolean {
+  if (!query) return true;
+  const normalized = query.toLowerCase();
+  return values.some((value) => (value ?? "").toLowerCase().includes(normalized));
+}
+
+async function safeAuditFetch<T>(path: string): Promise<T | null> {
+  try {
+    return await apiFetch<T>(path, { cache: "no-store" });
+  } catch (error) {
+    if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 export default function DashboardPage() {
   const [currentUser, setCurrentUser] = useState<MeResponse | null>(null);
-  const [activeClients, setActiveClients] = useState<number>(0);
-  const [scope, setScope] = useState<TaskScope>("self");
-  const [teamFilter, setTeamFilter] = useState<string>("");
+  const [clients, setClients] = useState<ClientRecord[]>([]);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
-  const [calendarDays, setCalendarDays] = useState<Record<string, { count: number; items: { id: string; title: string; due_at: string }[] }>>({});
-  const [monthCursor, setMonthCursor] = useState<Date>(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
-  });
-  const [selectedDayKey, setSelectedDayKey] = useState<string>(() => toDayKey(new Date()));
-  const [isLoadingTasks, setIsLoadingTasks] = useState(true);
-  const [taskError, setTaskError] = useState<string | null>(null);
-  const [refreshToken, setRefreshToken] = useState(0);
+  const [auditSummary, setAuditSummary] = useState<AuditSummaryResponse | null>(null);
+  const [auditAnomalies, setAuditAnomalies] = useState<AuditAnomaly[] | null>(null);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[] | null>(null);
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isSavingTask, setIsSavingTask] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createForm, setCreateForm] = useState<TaskCreateFormState>(DEFAULT_CREATE_FORM);
 
-  const [showOutlookComingSoon, setShowOutlookComingSoon] = useState(false);
-
   useEffect(() => {
     let isMounted = true;
 
-    async function loadContext() {
+    async function loadCommandCenter() {
+      setIsLoading(true);
+      setLoadError(null);
+
       try {
-        const [me, clients] = await Promise.all([
+        const [me, clientRows] = await Promise.all([
           apiFetch<MeResponse>("/api/v1/auth/me", { cache: "no-store" }),
           apiFetch<ClientRecord[]>("/api/v1/patients", { cache: "no-store" }),
         ]);
-        if (!isMounted) {
-          return;
-        }
+        if (!isMounted) return;
+
+        const scopeOptions = taskScopeOptionsForRole(me.role);
+        const preferredScope: TaskScope = scopeOptions.includes("all")
+          ? "all"
+          : scopeOptions.includes("team")
+            ? "team"
+            : "self";
+
+        const [taskList, summary, anomalies, events] = await Promise.all([
+          listTasks({
+            scope: preferredScope,
+            status: ["open", "in_progress"],
+            limit: 200,
+          }),
+          safeAuditFetch<AuditSummaryResponse>("/api/v1/audit/summary?hours=72"),
+          safeAuditFetch<AuditAnomaly[]>("/api/v1/audit/anomalies?hours=72&limit=20"),
+          safeAuditFetch<AuditEvent[]>("/api/v1/audit/events?limit=20"),
+        ]);
+
+        if (!isMounted) return;
+
         setCurrentUser(me);
-        setActiveClients(clients.length);
-      } catch {
-        if (!isMounted) {
-          return;
+        setClients(clientRows);
+        setTasks(taskList.items);
+        setAuditSummary(summary);
+        setAuditAnomalies(anomalies);
+        setAuditEvents(events);
+      } catch (error) {
+        if (!isMounted) return;
+        setLoadError(toErrorMessage(error, "Unable to load command center."));
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
         }
-        setActiveClients(0);
       }
     }
 
-    void loadContext();
+    void loadCommandCenter();
     return () => {
       isMounted = false;
     };
   }, []);
 
-  const taskPermissions = useMemo(
-    () => taskPermissionsForRole(currentUser?.role),
-    [currentUser?.role],
+  const userDisplayName = useMemo(() => {
+    if (currentUser?.full_name?.trim()) {
+      return currentUser.full_name.trim();
+    }
+    return currentUser?.email ?? "Session User";
+  }, [currentUser]);
+
+  const userInitials = useMemo(() => initialsFromName(userDisplayName), [userDisplayName]);
+
+  const claimsRejectedCount = useMemo(
+    () =>
+      tasks.filter((task) => {
+        const source = `${task.title} ${task.description ?? ""}`.toLowerCase();
+        return source.includes("claim") && (source.includes("denied") || source.includes("reject"));
+      }).length,
+    [tasks],
   );
 
-  const scopeOptions = useMemo(
-    () => taskScopeOptionsForRole(currentUser?.role),
-    [currentUser?.role],
-  );
-
-  useEffect(() => {
-    if (!scopeOptions.includes(scope)) {
-      setScope(scopeOptions[0] ?? "self");
-    }
-  }, [scope, scopeOptions]);
-
-  const monthGrid = useMemo(() => {
-    const monthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
-    const gridStart = startOfWeek(monthStart);
-    return Array.from({ length: 42 }, (_, index) => addDays(gridStart, index));
-  }, [monthCursor]);
-
-  useEffect(() => {
-    if (!currentUser) {
-      return;
-    }
-
-    let isMounted = true;
-
-    async function loadTasksAndCalendar() {
-      setIsLoadingTasks(true);
-      setTaskError(null);
-
-      const monthStart = monthGrid[0];
-      const monthEndExclusive = addDays(monthGrid[monthGrid.length - 1], 1);
-
-      try {
-        const [taskList, calendar] = await Promise.all([
-          listTasks({
-            scope,
-            team_id: scope !== "self" && teamFilter ? teamFilter : undefined,
-            status: ["open", "in_progress"],
-            limit: 100,
-          }),
-          loadTaskCalendar({
-            scope,
-            start: monthStart.toISOString(),
-            end: monthEndExclusive.toISOString(),
-          }),
-        ]);
-
-        if (!isMounted) {
-          return;
-        }
-
-        setTasks(taskList.items);
-        const nextCalendarDays: Record<string, { count: number; items: { id: string; title: string; due_at: string }[] }> = {};
-        for (const day of calendar.days) {
-          nextCalendarDays[day.day] = {
-            count: day.count,
-            items: day.items.map((item) => ({ id: item.id, title: item.title, due_at: item.due_at })),
-          };
-        }
-        setCalendarDays(nextCalendarDays);
-      } catch (error) {
-        if (!isMounted) {
-          return;
-        }
-        if (error instanceof ApiError && error.status === 403 && scope !== "self") {
-          setScope("self");
-          setTaskError("This account can only view personal tasks.");
-          return;
-        }
-        setTaskError(toMessage(error, "Unable to load tasks."));
-      } finally {
-        if (isMounted) {
-          setIsLoadingTasks(false);
-        }
-      }
-    }
-
-    void loadTasksAndCalendar();
-    return () => {
-      isMounted = false;
-    };
-  }, [currentUser, monthGrid, refreshToken, scope, teamFilter]);
-
-  const filteredTasks = useMemo(() => {
-    const selected = selectedDayKey;
+  const authsExpiringCount = useMemo(() => {
+    const now = Date.now();
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
     return tasks.filter((task) => {
-      if (!task.due_at) {
-        return false;
+      const source = `${task.title} ${task.description ?? ""}`.toLowerCase();
+      if (!source.includes("auth")) return false;
+      if (!task.due_at) return false;
+      const dueMs = new Date(task.due_at).getTime();
+      if (Number.isNaN(dueMs)) return false;
+      return dueMs >= now && dueMs <= now + sevenDaysMs;
+    }).length;
+  }, [tasks]);
+
+  const erasToReviewCount = useMemo(
+    () =>
+      tasks.filter((task) => {
+        const source = `${task.title} ${task.description ?? ""}`.toLowerCase();
+        return source.includes("era") || source.includes("remittance");
+      }).length,
+    [tasks],
+  );
+
+  const cptMismatchCount = useMemo(() => {
+    if (!auditAnomalies) return null;
+    return auditAnomalies.filter((item) => {
+      const source = `${item.kind} ${item.description}`.toLowerCase();
+      return source.includes("cpt") || source.includes("coding") || source.includes("mismatch");
+    }).length;
+  }, [auditAnomalies]);
+
+  const highRiskAnomalyCount = useMemo(
+    () => (auditAnomalies ?? []).filter((item) => item.severity === "high").length,
+    [auditAnomalies],
+  );
+
+  const mediumRiskAnomalyCount = useMemo(
+    () => (auditAnomalies ?? []).filter((item) => item.severity === "medium").length,
+    [auditAnomalies],
+  );
+
+  const complianceRiskScore = useMemo(() => {
+    if (!auditAnomalies) return null;
+    const high = auditAnomalies.filter((item) => item.severity === "high").length;
+    const medium = auditAnomalies.filter((item) => item.severity === "medium").length;
+    const low = auditAnomalies.filter((item) => item.severity !== "high" && item.severity !== "medium").length;
+    return Math.min(100, high * 20 + medium * 10 + low * 4);
+  }, [auditAnomalies]);
+
+  const clientRiskAlerts = useMemo<ClientRiskAlert[]>(() => {
+    const byClientId = new Map(clients.map((client) => [client.id, client]));
+
+    const taskLinkedAlerts: ClientRiskAlert[] = [];
+    for (const task of tasks) {
+      if ((task.related_type ?? "").toLowerCase() !== "patient" || !task.related_id) {
+        continue;
       }
-      const date = new Date(task.due_at);
-      if (Number.isNaN(date.getTime())) {
-        return false;
+      const client = byClientId.get(task.related_id);
+      if (!client) {
+        continue;
       }
-      return toDayKey(date) === selected;
-    });
-  }, [selectedDayKey, tasks]);
+      taskLinkedAlerts.push({
+        id: task.id,
+        clientId: client.id,
+        displayName: fullNameForClient(client),
+        reason: task.title || "Open patient task requires clinical follow-up.",
+        severityLabel: severityLabelFromTask(task),
+        severityTone: severityToneFromTask(task),
+      });
+      if (taskLinkedAlerts.length >= 8) {
+        break;
+      }
+    }
 
-  const selectedDayAgenda = useMemo(() => {
-    return calendarDays[selectedDayKey]?.items ?? [];
-  }, [calendarDays, selectedDayKey]);
+    if (taskLinkedAlerts.length > 0) {
+      return taskLinkedAlerts;
+    }
 
-  const tasksDueToday = useMemo(() => {
-    return tasks.filter((task) => taskDueBucket(task.due_at) === "today").length;
-  }, [tasks]);
+    if (clients.length === 0) {
+      return [
+        {
+          id: "todo-no-client-data",
+          displayName: "No clients available",
+          reason: "TODO: connect patient-level risk signal feed.",
+          severityLabel: "TODO",
+          severityTone: "informational",
+          isPlaceholder: true,
+        },
+      ];
+    }
 
-  const overdueItems = useMemo(() => {
-    return tasks.filter((task) => taskDueBucket(task.due_at) === "overdue").length;
-  }, [tasks]);
-
-  const recentActivity = useMemo(() => {
-    const latest = [...tasks]
-      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-      .slice(0, 5);
-    return latest.map((task) => ({
-      id: task.id,
-      text: `${task.title} · ${formatStatusLabel(task.status)}`,
-      time: new Date(task.updated_at).toLocaleString(),
+    return clients.slice(0, 6).map((client) => ({
+      id: `todo-${client.id}`,
+      clientId: client.id,
+      displayName: fullNameForClient(client),
+      reason: "TODO: connect patient-level risk scoring feed.",
+      severityLabel: "TODO",
+      severityTone: "informational",
+      isPlaceholder: true,
     }));
-  }, [tasks]);
+  }, [clients, tasks]);
 
-  const sidebarGroups = useMemo<SidebarNavGroup[]>(() => {
-    const scopeItems = scopeOptions.map((option) => ({
-      id: option,
-      label: option === "self" ? "My Tasks" : option === "team" ? "Team Tasks" : "All Tasks",
-      description:
-        option === "self"
-          ? "Only items assigned to you."
-          : option === "team"
-            ? "Shared team workload."
-            : "Organization-wide queue.",
-      active: scope === option,
-      onSelect: () => setScope(option),
-      testId: `operations-scope-${option}`,
+  const revenueSignals = useMemo<RevenueSignal[]>(() => {
+    return [
+      {
+        id: "claims-rejected",
+        label: "Claims rejected",
+        countLabel: `${claimsRejectedCount}`,
+        detail: "Derived from open billing-related tasks.",
+        tone: claimsRejectedCount > 0 ? "critical" : "informational",
+      },
+      {
+        id: "auth-expiring",
+        label: "Authorizations expiring",
+        countLabel: `${authsExpiringCount}`,
+        detail: "Derived from tasks due within 7 days.",
+        tone: authsExpiringCount > 0 ? "attention" : "informational",
+      },
+      {
+        id: "cpt-mismatch",
+        label: "High-risk CPT mismatches",
+        countLabel: cptMismatchCount === null ? "TODO" : `${cptMismatchCount}`,
+        detail:
+          cptMismatchCount === null
+            ? "TODO: requires audit read access for mismatch signal extraction."
+            : "Derived from available anomaly descriptors.",
+        tone: cptMismatchCount && cptMismatchCount > 0 ? "critical" : "informational",
+      },
+      {
+        id: "era-review",
+        label: "ERAs to review",
+        countLabel: `${erasToReviewCount}`,
+        detail: "Derived from remittance and ERA task patterns.",
+        tone: erasToReviewCount > 0 ? "attention" : "informational",
+      },
+    ];
+  }, [authsExpiringCount, claimsRejectedCount, cptMismatchCount, erasToReviewCount]);
+
+  const complianceFeed = useMemo<ComplianceFeedItem[]>(() => {
+    const fromEvents: ComplianceFeedItem[] = (auditEvents ?? []).map((event) => ({
+      id: `event-${event.id}`,
+      summary: describeAuditAction(event),
+      metadata: formatMetaTime(event.created_at),
+      createdAt: event.created_at,
     }));
+
+    const fromAnomalies: ComplianceFeedItem[] = (auditAnomalies ?? []).map((anomaly, index) => ({
+      id: `anomaly-${index}-${anomaly.sample_time}`,
+      summary: describeAnomaly(anomaly),
+      metadata: `${humanizeToken(anomaly.severity)} severity - ${formatMetaTime(anomaly.sample_time)}`,
+      createdAt: anomaly.sample_time,
+    }));
+
+    const combined = [...fromEvents, ...fromAnomalies]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 12);
+
+    if (combined.length > 0) {
+      return combined;
+    }
 
     return [
       {
-        id: "scope",
-        label: "Task Scope",
-        items: scopeItems,
+        id: "todo-compliance-feed",
+        summary: "TODO: connect compliance activity feed (requires audit:read permission).",
+        metadata: "No audit activity stream is currently available for this role.",
+        createdAt: new Date().toISOString(),
+      },
+    ];
+  }, [auditAnomalies, auditEvents]);
+
+  const filteredRiskAlerts = useMemo(
+    () =>
+      clientRiskAlerts.filter((alert) =>
+        matchesSearch(searchQuery, [alert.displayName, alert.reason, alert.severityLabel]),
+      ),
+    [clientRiskAlerts, searchQuery],
+  );
+
+  const filteredRevenueSignals = useMemo(
+    () =>
+      revenueSignals.filter((item) =>
+        matchesSearch(searchQuery, [item.label, item.detail, item.countLabel]),
+      ),
+    [revenueSignals, searchQuery],
+  );
+
+  const filteredComplianceFeed = useMemo(
+    () =>
+      complianceFeed.filter((item) =>
+        matchesSearch(searchQuery, [item.summary, item.metadata]),
+      ),
+    [complianceFeed, searchQuery],
+  );
+
+  const notificationCount = useMemo(() => {
+    const overdueCount = tasks.filter((task) => taskDueBucket(task.due_at) === "overdue").length;
+    return overdueCount + highRiskAnomalyCount + mediumRiskAnomalyCount;
+  }, [highRiskAnomalyCount, mediumRiskAnomalyCount, tasks]);
+
+  const commandNavGroups = useMemo<SidebarNavGroup[]>(() => {
+    return [
+      {
+        id: "clinical",
+        label: "Clinical",
+        items: [
+          { id: "clinical-clients", label: "Clients", href: "/clients" },
+          { id: "clinical-forms", label: "Forms", href: "/forms" },
+          { id: "clinical-documents", label: "Documents", href: "/documents" },
+        ],
       },
       {
-        id: "workflow",
-        label: "Workflow",
+        id: "revenue",
+        label: "Revenue",
         items: [
-          {
-            id: "tasks-index",
-            label: "Open Task Queue",
-            description: "Review and triage all active work.",
-            badge: tasksDueToday > 0 ? `${tasksDueToday} due today` : undefined,
-            href: "/tasks",
-            testId: "operations-open-task-queue",
-          },
+          { id: "revenue-billing", label: "Billing", href: "/billing" },
+          { id: "revenue-reports", label: "Reports", href: "/reports" },
+        ],
+      },
+      {
+        id: "operations",
+        label: "Operations",
+        items: [
+          { id: "ops-command", label: "Command Center", href: "/dashboard", active: true },
+          { id: "ops-calls", label: "Calls & Reception", href: "/calls-reception" },
+          { id: "ops-tasks", label: "Tasks", href: "/tasks" },
+        ],
+      },
+      {
+        id: "compliance",
+        label: "Compliance",
+        items: [
+          { id: "comp-audit", label: "Audit Center", href: "/audit-center" },
+          { id: "comp-workbench", label: "Compliance", href: "/compliance" },
+        ],
+      },
+      {
+        id: "system",
+        label: "System",
+        items: [
+          { id: "sys-admin", label: "Admin Center", href: "/admin-center" },
+          { id: "sys-integrations", label: "Integrations", href: "/integrations" },
+          { id: "sys-org-settings", label: "Organization Settings", href: "/organization/settings" },
         ],
       },
     ];
-  }, [scope, scopeOptions, tasksDueToday]);
-
-  async function handleQuickComplete(taskId: string) {
-    try {
-      await completeTask(taskId);
-      setRefreshToken((current) => current + 1);
-    } catch (error) {
-      setTaskError(toMessage(error, "Unable to complete task."));
-    }
-  }
+  }, []);
 
   async function handleCreateTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -385,238 +587,224 @@ export default function DashboardPage() {
       });
       setCreateForm(DEFAULT_CREATE_FORM);
       setIsCreateOpen(false);
-      setRefreshToken((current) => current + 1);
     } catch (error) {
-      setCreateError(toMessage(error, "Unable to create task."));
+      setCreateError(toErrorMessage(error, "Unable to create task."));
     } finally {
       setIsSavingTask(false);
     }
   }
 
+  function openTannerAi() {
+    const trigger = document.querySelector<HTMLButtonElement>("[data-testid='copilot-trigger']");
+    if (trigger) {
+      trigger.click();
+    }
+  }
+
   return (
-    <PageShell
-      eyebrow="Work"
-      title="Operations"
-      description="Focus on the highest-impact work for today."
-      actions={
-        <>
-          <Button type="button" variant="outline" asChild>
-            <Link href="/tasks">View all tasks</Link>
-          </Button>
-          <Button type="button" onClick={() => setIsCreateOpen(true)}>
-            Add Task
-          </Button>
-        </>
-      }
-      metrics={
-        <div className="grid gap-[var(--space-16)] md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard label="Tasks due today" value={`${tasksDueToday}`} hint="Needs action" />
-          <MetricCard label="Overdue items" value={`${overdueItems}`} hint="Escalate first" />
-          <MetricCard label="Active clients" value={`${activeClients}`} hint="Current relationships" />
-          <MetricCard label="Open referrals" value={`${REFERRALS_PLACEHOLDER_COUNT}`} hint="Pipeline in progress" />
-        </div>
-      }
-      sidebar={
-        <div className="space-y-[var(--space-16)]">
-          <SidebarNav groups={sidebarGroups} testId="operations-sidebar-nav" />
-          {scope !== "self" ? (
-            <SectionCard title="Team Filter" description="Limit the queue to a specific discipline.">
-              <label htmlFor="operations-team-filter" className="ui-type-meta font-semibold uppercase tracking-[0.12em]">
-                Team
-              </label>
-              <select
-                id="operations-team-filter"
-                className="mt-[var(--space-8)] h-[var(--space-32)] w-full rounded-[var(--radius-6)] border border-[var(--neutral-border)] bg-[var(--neutral-panel)] px-[var(--space-12)] text-[length:var(--font-size-12)] text-[var(--neutral-text)]"
-                value={teamFilter}
-                onChange={(event) => setTeamFilter(event.target.value)}
-              >
-                <option value="">All teams</option>
-                {Object.entries(TEAM_LABELS).map(([teamKey, label]) => (
-                  <option key={teamKey} value={teamKey}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </SectionCard>
-          ) : null}
-          {taskPermissions.canReadAll ? (
-            <SectionCard title="Calendar Overlay" description="Outlook availability will be introduced in a future release.">
-              <label
-                className="inline-flex items-center gap-[var(--space-8)] ui-type-body text-[var(--neutral-muted)]"
-                title="Read-only Outlook calendar overlay will be available in a future release."
-              >
-                <input
-                  type="checkbox"
-                  checked={showOutlookComingSoon}
-                  onChange={(event) => setShowOutlookComingSoon(event.target.checked)}
-                  disabled
-                  className="h-[var(--space-16)] w-[var(--space-16)] rounded-[var(--radius-4)] border-[var(--neutral-border)]"
-                />
-                Outlook overlay (coming soon)
-              </label>
-            </SectionCard>
-          ) : null}
-        </div>
-      }
-    >
-      <div className="grid gap-[var(--space-16)] xl:grid-cols-[1.6fr_1fr]">
-        <SectionCard
-          title={`Task List - ${selectedDayKey}`}
-          description="Use scope controls to focus your personal, team, or global queue."
-          actions={
-            <div className="flex flex-wrap items-center gap-[var(--space-8)]">
-              {scopeOptions.map((option) => (
-                <Button
-                  key={option}
-                  type="button"
-                  variant={scope === option ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setScope(option)}
-                >
-                  {option === "self" ? "My Tasks" : option === "team" ? "Team" : "All"}
-                </Button>
-              ))}
-            </div>
-          }
-        >
-          <div className="space-y-[var(--space-8)]">
-            {taskError ? (
-              <div className="ui-panel bg-[color-mix(in_srgb,var(--status-critical)_8%,white)] px-[var(--space-12)] py-[var(--space-8)] text-[var(--status-critical)]">
-                {taskError}
-              </div>
-            ) : null}
-
-            {isLoadingTasks ? <p className="ui-type-body text-[var(--neutral-muted)]">Loading tasks...</p> : null}
-
-            {!isLoadingTasks && filteredTasks.length === 0 ? (
-              <div className="ui-panel bg-[var(--muted)] px-[var(--space-16)] py-[var(--space-16)] ui-type-body text-[var(--neutral-muted)]">
-                No tasks due on {selectedDayKey}. Use Add Task to create one.
-              </div>
-            ) : null}
-
-            {!isLoadingTasks
-              ? filteredTasks.map((task) => (
-                  <DataListRow
-                    key={task.id}
-                    title={task.title}
-                    description={task.description || undefined}
-                    meta={[
-                      `Due: ${formatDueAt(task.due_at)}`,
-                      `Priority: ${priorityLabel(task.priority)}`,
-                      ...(scope !== "self" ? [`Assignee: ${task.assigned_to_user_name || "Unassigned"}`] : []),
-                    ]}
-                    statusLabel={formatStatusLabel(task.status)}
-                    statusTone={taskStatusTone(task)}
-                    actions={
-                      <Button type="button" variant="outline" size="sm" onClick={() => handleQuickComplete(task.id)}>
-                        Complete
-                      </Button>
-                    }
-                  />
-                ))
-              : null}
-          </div>
-        </SectionCard>
-
+    <div className="flex flex-col gap-[var(--space-24)]" data-testid="operations-command-center">
+      <header className="ui-panel p-[var(--space-16)] sm:p-[var(--space-24)]">
         <div className="flex flex-col gap-[var(--space-16)]">
-          <SectionCard
-            title="Calendar"
-            actions={
-              <div className="flex items-center gap-[var(--space-8)]">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1))}
-                >
-                  Prev
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1))}
-                >
-                  Next
-                </Button>
-              </div>
-            }
-          >
-            <div className="space-y-[var(--space-12)]">
-              <p className="ui-type-body text-[var(--neutral-muted)]">
-                {monthCursor.toLocaleDateString(undefined, { month: "long", year: "numeric" })}
+          <div className="flex flex-wrap items-start justify-between gap-[var(--space-16)]">
+            <div className="min-w-0">
+              <p className="ui-type-meta font-semibold uppercase tracking-[0.14em]">{BRANDING.name}</p>
+              <h1 className="ui-type-page-title mt-[var(--space-4)] text-[var(--neutral-text)]">Clinical Command Center</h1>
+              <p className="ui-type-body mt-[var(--space-8)] text-[var(--neutral-muted)]">
+                Operations dashboard for clinical risk, revenue integrity, and compliance oversight.
               </p>
-              <div className="grid grid-cols-7 gap-[var(--space-4)] text-center ui-type-meta font-semibold uppercase tracking-[0.14em]">
-                {WEEKDAY_LABELS.map((label) => (
-                  <span key={label}>{label}</span>
-                ))}
-              </div>
-              <div className="grid grid-cols-7 gap-[var(--space-4)]">
-                {monthGrid.map((day) => {
-                  const dayKey = toDayKey(day);
-                  const isSelected = dayKey === selectedDayKey;
-                  const isCurrentMonth = day.getMonth() === monthCursor.getMonth();
-                  const dayCount = calendarDays[dayKey]?.count ?? 0;
-                  return (
-                    <button
-                      key={dayKey}
-                      type="button"
-                      onClick={() => setSelectedDayKey(dayKey)}
-                      className={`rounded-[var(--radius-4)] border px-[var(--space-8)] py-[var(--space-8)] text-left text-[length:var(--font-size-12)] transition-colors ${
-                        isSelected
-                          ? "border-[var(--ring)] bg-[color-mix(in_srgb,var(--accent)_80%,white)] text-[var(--neutral-text)]"
-                          : "border-[var(--neutral-border)] bg-[var(--neutral-panel)] text-[var(--neutral-text)] hover:bg-[var(--muted)]"
-                      } ${!isCurrentMonth ? "opacity-60" : "opacity-100"}`}
-                    >
-                      <span className="block font-semibold">{day.getDate()}</span>
-                      <span className="ui-type-meta mt-[var(--space-4)] block">
-                        {dayCount > 0 ? `${dayCount} due` : ""}
-                      </span>
-                    </button>
-                  );
-                })}
+            </div>
+
+            <div className="flex w-full max-w-[640px] flex-wrap items-center justify-end gap-[var(--space-8)] lg:w-auto">
+              <div className="relative min-w-[220px] flex-1 lg:w-[320px] lg:flex-none">
+                <Search className="pointer-events-none absolute left-[var(--space-12)] top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--neutral-muted)]" />
+                <Input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Global search (clients, revenue, compliance)"
+                  className="h-[var(--space-40)] pl-[36px]"
+                  aria-label="Global search"
+                />
               </div>
 
-              <div className="ui-panel bg-[var(--muted)] px-[var(--space-12)] py-[var(--space-12)]">
-                <p className="ui-type-meta font-semibold uppercase tracking-[0.14em]">Agenda</p>
-                <div className="mt-[var(--space-8)] space-y-[var(--space-8)]">
-                  {selectedDayAgenda.length === 0 ? (
-                    <p className="ui-type-meta">No due tasks on this day.</p>
-                  ) : (
-                    selectedDayAgenda.map((item) => (
-                      <DataListRow
-                        key={item.id}
-                        title={item.title}
-                        meta={`Due: ${formatDueAt(item.due_at)}`}
-                        statusLabel="Due"
-                        statusTone="informational"
-                        className="bg-[var(--neutral-panel)]"
-                      />
-                    ))
-                  )}
+              <Button type="button" variant="outline" className="relative h-[var(--space-40)] px-[var(--space-12)]" aria-label="Notifications">
+                <Bell className="h-4 w-4" />
+                <span className="ml-[var(--space-4)]">Notifications</span>
+                {notificationCount > 0 ? (
+                  <span className="ml-[var(--space-4)] inline-flex min-w-[22px] justify-center rounded-[var(--radius-4)] bg-[var(--status-critical)] px-[var(--space-4)] py-[2px] text-[10px] font-semibold text-white">
+                    {notificationCount}
+                  </span>
+                ) : null}
+              </Button>
+
+              <Button type="button" variant="secondary" className="h-[var(--space-40)]" onClick={openTannerAi}>
+                <Brain className="h-4 w-4" />
+                Tanner AI
+              </Button>
+
+              <Button type="button" onClick={() => setIsCreateOpen(true)} className="h-[var(--space-40)]">
+                Create Task
+              </Button>
+
+              <div className="inline-flex items-center gap-[var(--space-8)] rounded-[var(--radius-8)] border border-[var(--neutral-border)] bg-[var(--neutral-panel)] px-[var(--space-8)] py-[var(--space-8)]">
+                <div className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-8)] bg-[var(--primary)] text-[length:var(--font-size-14)] font-semibold text-[var(--primary-foreground)]">
+                  {userInitials}
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-[length:var(--font-size-14)] font-semibold text-[var(--neutral-text)]">
+                    {userDisplayName}
+                  </p>
+                  <Badge variant="outline" className="mt-[2px] text-[10px] uppercase tracking-[0.1em]">
+                    {roleLabel(currentUser?.role)}
+                  </Badge>
                 </div>
               </div>
             </div>
-          </SectionCard>
+          </div>
 
-          <SectionCard title="Recent Activity">
+          {isLoading ? <p className="ui-type-meta">Loading command center data...</p> : null}
+          {loadError ? (
+            <div className="rounded-[var(--radius-6)] border border-[color-mix(in_srgb,var(--status-critical)_25%,white)] bg-[color-mix(in_srgb,var(--status-critical)_8%,white)] px-[var(--space-12)] py-[var(--space-8)] text-[length:var(--font-size-14)] text-[var(--status-critical)]">
+              {loadError}
+            </div>
+          ) : null}
+        </div>
+      </header>
+
+      <div className="grid gap-[var(--space-16)] lg:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className="space-y-[var(--space-16)]">
+          <SidebarNav groups={commandNavGroups} testId="operations-command-nav" />
+          <SectionCard title="Data Coverage" description="Only connected data sources are shown below.">
             <div className="space-y-[var(--space-8)]">
-              {recentActivity.length === 0 ? (
-                <p className="ui-type-body text-[var(--neutral-muted)]">No recent activity yet.</p>
-              ) : (
-                recentActivity.map((item) => (
-                  <DataListRow
-                    key={item.id}
-                    title={item.text}
-                    meta={item.time}
-                    statusLabel="Update"
-                    statusTone="informational"
-                  />
-                ))
-              )}
+              <p className="ui-type-body text-[var(--neutral-muted)]">
+                Active sources: patients, tasks{auditSummary || auditAnomalies || auditEvents ? ", audit." : "."}
+              </p>
+              {!auditSummary && !auditAnomalies && !auditEvents ? (
+                <p className="ui-type-meta text-[var(--status-attention)]">
+                  TODO: audit-backed metrics require audit:read permission.
+                </p>
+              ) : null}
             </div>
           </SectionCard>
-        </div>
+        </aside>
+
+        <section className="min-w-0 space-y-[var(--space-16)]">
+          <div className="grid gap-[var(--space-16)] sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Active Clients" value={`${clients.length}`} hint="Live patient registry" tone="info" />
+            <MetricCard
+              label="Pending Claims"
+              value={`${claimsRejectedCount}`}
+              hint="Proxy from open billing tasks"
+              tone={claimsRejectedCount > 0 ? "warn" : "neutral"}
+            />
+            <MetricCard
+              label="A/R Balance"
+              value="TODO"
+              hint="TODO: connect billing A/R ledger source"
+              icon={<CircleDollarSign className="h-4 w-4" />}
+              tone="neutral"
+            />
+            <MetricCard
+              label="Compliance Risk"
+              value={complianceRiskScore === null ? "TODO" : `${complianceRiskScore}/100`}
+              hint={
+                complianceRiskScore === null
+                  ? "TODO: requires audit access"
+                  : `${highRiskAnomalyCount} high-risk findings in 72h`
+              }
+              tone={
+                complianceRiskScore === null
+                  ? "neutral"
+                  : complianceRiskScore >= 70
+                    ? "danger"
+                    : complianceRiskScore >= 35
+                      ? "warn"
+                      : "success"
+              }
+            />
+          </div>
+
+          <div className="grid gap-[var(--space-16)] xl:grid-cols-2">
+            <SectionCard title="Client Risk Alerts" description="Patient-linked risk cues for rapid chart review." testId="client-risk-alerts">
+              <div className="space-y-[var(--space-8)]">
+                {filteredRiskAlerts.length === 0 ? (
+                  <p className="ui-type-body text-[var(--neutral-muted)]">No client risk alerts match the current search.</p>
+                ) : (
+                  filteredRiskAlerts.map((alert) => (
+                    <div
+                      key={alert.id}
+                      className="rounded-[var(--radius-6)] border border-[var(--neutral-border)] bg-[var(--neutral-panel)] px-[var(--space-12)] py-[var(--space-12)] transition-colors hover:bg-[var(--muted)]"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-[var(--space-12)]">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-[var(--space-8)]">
+                            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-6)] bg-[var(--accent)] text-[length:var(--font-size-12)] font-semibold text-[var(--accent-foreground)]">
+                              {initialsFromName(alert.displayName)}
+                            </span>
+                            <p className="truncate text-[length:var(--font-size-14)] font-semibold text-[var(--neutral-text)]">
+                              {alert.displayName}
+                            </p>
+                          </div>
+                          <p className="ui-type-body mt-[var(--space-8)] text-[var(--neutral-muted)]">{alert.reason}</p>
+                        </div>
+
+                        <div className="flex items-center gap-[var(--space-8)]">
+                          <span className={`ui-status-pill ${severityChipClass(alert.severityTone)}`}>{alert.severityLabel}</span>
+                          {alert.clientId ? (
+                            <Button type="button" variant="outline" size="sm" asChild>
+                              <Link href={`/patients/${encodeURIComponent(alert.clientId)}`}>View Chart</Link>
+                            </Button>
+                          ) : (
+                            <span className="ui-type-meta">TODO</span>
+                          )}
+                        </div>
+                      </div>
+                      {alert.isPlaceholder ? <p className="ui-type-meta mt-[var(--space-8)] text-[var(--status-attention)]">TODO placeholder</p> : null}
+                    </div>
+                  ))
+                )}
+              </div>
+            </SectionCard>
+
+            <SectionCard title="Revenue Integrity" description="Claims and reimbursement quality checkpoints." testId="revenue-integrity-list">
+              <div className="space-y-[var(--space-8)]">
+                {filteredRevenueSignals.map((item) => (
+                  <DataListRow
+                    key={item.id}
+                    title={item.label}
+                    description={item.detail}
+                    statusLabel={item.countLabel}
+                    statusTone={item.tone}
+                    actions={
+                      <Button type="button" variant="outline" size="sm" asChild>
+                        <Link href="/billing">Open Billing</Link>
+                      </Button>
+                    }
+                  />
+                ))}
+                {filteredRevenueSignals.length === 0 ? (
+                  <p className="ui-type-body text-[var(--neutral-muted)]">No revenue signals match the current search.</p>
+                ) : null}
+              </div>
+            </SectionCard>
+          </div>
+
+          <SectionCard title="Compliance Activity Feed" description="Human-readable governance events for operational follow-up." testId="compliance-activity-feed">
+            <div className="space-y-[var(--space-8)]">
+              {filteredComplianceFeed.map((item) => (
+                <DataListRow
+                  key={item.id}
+                  title={item.summary}
+                  meta={item.metadata}
+                  statusLabel="Logged"
+                  statusTone="informational"
+                />
+              ))}
+              {filteredComplianceFeed.length === 0 ? (
+                <p className="ui-type-body text-[var(--neutral-muted)]">No compliance events match the current search.</p>
+              ) : null}
+            </div>
+          </SectionCard>
+        </section>
       </div>
 
       {isCreateOpen ? (
@@ -712,7 +900,6 @@ export default function DashboardPage() {
           </Card>
         </div>
       ) : null}
-    </PageShell>
+    </div>
   );
 }
-
