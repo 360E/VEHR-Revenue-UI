@@ -1,14 +1,18 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
 import CopilotDrawer from "../components/copilot-drawer";
+import { ModuleSidebar } from "@/components/app-shell/module-sidebar";
+import { TopBar } from "@/components/app-shell/top-bar";
+import { Button } from "@/components/ui/button";
 import { BRANDING } from "@/lib/branding";
 import { ApiError, apiFetch } from "@/lib/api";
 import { clearAccessToken } from "@/lib/auth";
+import { AppLayoutConfigContext, type AppLayoutConfig } from "@/lib/app-layout-config";
 import {
   ModuleId,
   getModuleById,
@@ -17,6 +21,7 @@ import {
   visibleModuleNavItems,
 } from "@/lib/modules";
 import { MePreferences, fetchMePreferences, patchMePreferences } from "@/lib/preferences";
+import { type SidebarNavGroup } from "@/components/enterprise/sidebar-nav";
 
 type MeResponse = {
   id: string;
@@ -41,12 +46,12 @@ function initialsForUser(user: MeResponse | null): string {
   return source.slice(0, 2).toUpperCase();
 }
 
-function NavGlyph({ label }: { label: string }) {
-  return (
-    <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-slate-200 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-700">
-      {label.slice(0, 2)}
-    </span>
-  );
+function displayRoleLabel(role: string | undefined): string {
+  if (!role) return "Member";
+  return role
+    .split("_")
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 export default function AppLayout({ children }: { children: ReactNode }) {
@@ -59,6 +64,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [viewportWidth, setViewportWidth] = useState(1440);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [layoutConfig, setLayoutConfigState] = useState<Partial<AppLayoutConfig>>({});
+  const [searchQuery, setSearchQuery] = useState("");
 
   const lastPatchedModuleRef = useRef<ModuleId | null>(null);
 
@@ -107,7 +114,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       }
     }
 
-    validateSessionAndPrefs();
+    void validateSessionAndPrefs();
     return () => {
       isMounted = false;
     };
@@ -116,6 +123,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const isDirectory = pathname === "/directory";
   const activeModuleId = resolveModuleForPath(pathname);
   const activeModule = activeModuleId ? getModuleById(activeModuleId) : null;
+  const isMobile = viewportWidth < 1024;
 
   const grantedPermissions = useMemo(
     () => new Set(preferences?.granted_permissions ?? []),
@@ -129,10 +137,48 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   const userInitials = useMemo(() => initialsForUser(currentUser), [currentUser]);
 
-  const isMobile = viewportWidth < 1024;
-  const isForcedCollapsed = viewportWidth < 1280;
-  const isSidebarCollapsed = isForcedCollapsed || Boolean(preferences?.sidebar_collapsed);
-  const isCallCenterTheme = activeModuleId === "call_center";
+  const moduleSidebarGroups = useMemo<SidebarNavGroup[]>(() => {
+    if (!activeModule) return [];
+    return [
+      {
+        id: `${activeModule.id}-links`,
+        label: "Navigation",
+        items: moduleNavItems.map((item) => {
+          const isInternal = item.href.startsWith("/");
+          const isActive = isInternal && (pathname === item.href || pathname?.startsWith(`${item.href}/`));
+          return {
+            id: item.href,
+            label: item.label,
+            href: item.href,
+            external: item.external,
+            active: isActive,
+            description: item.external ? "Opens in a new tab" : undefined,
+            testId: `module-nav-${item.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+          };
+        }),
+      },
+    ];
+  }, [activeModule, moduleNavItems, pathname]);
+
+  const showSidebarByDefault = !isDirectory && !!activeModule;
+  const showSidebar = typeof layoutConfig.showSidebar === "boolean"
+    ? layoutConfig.showSidebar
+    : showSidebarByDefault;
+
+  const topTitle = layoutConfig.pageTitle
+    ?? (isDirectory
+      ? "Organizational Directory"
+      : activeModule
+        ? `${activeModule.name} / ${pageTitleForPath(pathname, activeModule.id)}`
+        : "Workspace");
+
+  const subtitle = layoutConfig.subtitle
+    ?? (isDirectory
+      ? "Launch a module workspace and continue where your team left off."
+      : activeModule?.description);
+
+  const showSearch = layoutConfig.showSearch ?? false;
+  const searchPlaceholder = layoutConfig.searchPlaceholder ?? "Search workspace";
 
   useEffect(() => {
     if (!preferences || !activeModuleId || isDirectory) {
@@ -168,6 +214,19 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     }
   }, [isMobile]);
 
+  const setLayoutConfig = useCallback((config: Partial<AppLayoutConfig>) => {
+    setLayoutConfigState((current) => ({ ...current, ...config }));
+  }, []);
+
+  const resetLayoutConfig = useCallback(() => {
+    setLayoutConfigState({});
+  }, []);
+
+  useEffect(() => {
+    resetLayoutConfig();
+    setSearchQuery("");
+  }, [pathname, resetLayoutConfig]);
+
   async function updatePreferences(partial: Partial<MePreferences>) {
     try {
       const payload: {
@@ -199,8 +258,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   if (isCheckingSession) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[var(--ui-gray-canvas)] px-6">
-        <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 text-sm text-slate-600 shadow-sm">
+      <div className="flex min-h-screen items-center justify-center bg-background px-6">
+        <div className="ui-panel px-5 py-4 text-sm text-[var(--neutral-muted)]">
           Verifying session...
         </div>
       </div>
@@ -209,203 +268,116 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   if (sessionError || !preferences) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[var(--ui-gray-canvas)] px-6">
-        <div className="max-w-xl rounded-xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-700 shadow-sm">
+      <div className="flex min-h-screen items-center justify-center bg-background px-6">
+        <div className="max-w-xl rounded-xl border border-[color-mix(in_srgb,var(--danger)_30%,white)] bg-[color-mix(in_srgb,var(--danger)_10%,white)] px-5 py-4 text-sm text-[var(--danger)] shadow-sm">
           {sessionError || "Unable to load workspace preferences"}
         </div>
       </div>
     );
   }
 
-  const topTitle = isDirectory
-    ? "Organizational Directory"
-    : activeModule
-      ? `${activeModule.name} / ${pageTitleForPath(pathname, activeModule.id)}`
-      : "Workspace";
+  const layoutContextValue = {
+    setLayoutConfig,
+    resetLayoutConfig,
+    searchQuery,
+    setSearchQuery,
+  };
 
-  const showSidebar = !isDirectory && !!activeModule;
+  const utilitySlot = (
+    <>
+      <Button variant="outline" size="sm" asChild>
+        <Link href="/directory">Launcher</Link>
+      </Button>
+
+      <Button
+        type="button"
+        variant={preferences.copilot_enabled ? "secondary" : "outline"}
+        size="sm"
+        onClick={() => updatePreferences({ copilot_enabled: !preferences.copilot_enabled })}
+      >
+        Tanner {preferences.copilot_enabled ? "On" : "Off"}
+      </Button>
+
+      <div className="inline-flex items-center gap-[var(--space-8)] rounded-xl border border-[var(--neutral-border)] bg-[var(--neutral-panel)] px-[var(--space-8)] py-[var(--space-8)]">
+        <span className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-6)] bg-[var(--primary)] text-[11px] font-semibold text-[var(--primary-foreground)]">
+          {userInitials}
+        </span>
+        <span className="hidden sm:block">
+          <span className="block text-xs font-semibold text-[var(--neutral-text)]">
+            {currentUser?.full_name || currentUser?.email || "Session User"}
+          </span>
+          <span className="block text-[11px] text-[var(--neutral-muted)]">
+            {displayRoleLabel(currentUser?.role)}
+          </span>
+        </span>
+        <button
+          type="button"
+          onClick={handleSignOut}
+          className="rounded-[var(--radius-4)] px-[var(--space-8)] py-[var(--space-4)] text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--neutral-muted)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--neutral-text)]"
+        >
+          Sign Out
+        </button>
+      </div>
+    </>
+  );
 
   return (
-    <div className={`min-h-screen ${isCallCenterTheme ? "bg-slate-100" : "bg-[var(--ui-gray-canvas)]"}`}>
-      <div className="mx-auto flex min-h-screen w-full max-w-[1600px] gap-4 px-3 py-4 sm:px-4 lg:gap-5 lg:px-6">
-        {showSidebar && !isMobile ? (
-          <aside
-            className={`sticky top-4 h-[calc(100vh-2rem)] shrink-0 overflow-hidden rounded-xl border border-slate-900 bg-[var(--ui-nav-bg)] text-slate-200 transition-all duration-200 ${
-              isSidebarCollapsed ? "w-20" : "w-72"
-            }`}
-          >
-            <div className="flex h-full flex-col">
-              <div className="border-b border-slate-800 px-4 py-4">
-                <div className={`text-sm font-semibold tracking-tight text-white ${isSidebarCollapsed ? "text-center" : ""}`}>
-                  {isSidebarCollapsed ? "E360" : activeModule?.name}
-                </div>
-                {!isSidebarCollapsed ? (
-                  <div className="mt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Module Navigation
-                  </div>
-                ) : null}
-              </div>
+    <AppLayoutConfigContext.Provider value={layoutContextValue}>
+      <div className="min-h-screen bg-background text-foreground antialiased">
+        <div className="mx-auto flex min-h-screen w-full max-w-7xl gap-[var(--space-16)] px-6 py-6">
+          {showSidebar && !isMobile ? (
+            <aside className="hidden w-72 shrink-0 lg:block">
+              <ModuleSidebar moduleName={activeModule?.name ?? "Module"} groups={moduleSidebarGroups} />
+            </aside>
+          ) : null}
 
-              <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2" aria-label="Module navigation">
-                {moduleNavItems.map((item) => {
-                  const isInternal = item.href.startsWith("/");
-                  const isActive = isInternal && (pathname === item.href || pathname?.startsWith(`${item.href}/`));
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      target={item.external ? "_blank" : undefined}
-                      rel={item.external ? "noopener noreferrer" : undefined}
-                      className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors ${
-                        isActive ? "bg-white/10 text-white" : "text-slate-300 hover:bg-white/5 hover:text-white"
-                      }`}
-                    >
-                      <NavGlyph label={item.label} />
-                      {!isSidebarCollapsed ? <span className="text-sm font-semibold">{item.label}</span> : null}
-                    </Link>
-                  );
-                })}
-              </nav>
+          <div className="flex min-w-0 flex-1 flex-col gap-[var(--space-16)]">
+            <TopBar
+              productName={BRANDING.name}
+              pageTitle={topTitle}
+              subtitle={subtitle}
+              showSearch={showSearch}
+              searchPlaceholder={searchPlaceholder}
+              searchQuery={searchQuery}
+              onSearchQueryChange={setSearchQuery}
+              actions={layoutConfig.actions}
+              utilitySlot={utilitySlot}
+              showMobileSidebarButton={showSidebar}
+              onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
+            />
 
-              <div className="border-t border-slate-800 p-2">
-                {viewportWidth >= 1280 ? (
-                  <button
-                    type="button"
-                    onClick={() => updatePreferences({ sidebar_collapsed: !preferences.sidebar_collapsed })}
-                    className="flex w-full items-center justify-center rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
-                  >
-                    {preferences.sidebar_collapsed ? "Expand" : "Collapse"}
-                  </button>
-                ) : (
-                  <div className="rounded-lg border border-slate-700 px-3 py-2 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                    Auto-collapsed
-                  </div>
-                )}
+            <main className="ui-panel min-h-0 flex-1 overflow-auto p-[var(--space-24)]">
+              {children}
+            </main>
+
+            <footer className="px-1 text-xs text-[var(--neutral-muted)]">{BRANDING.internalNote}</footer>
+          </div>
+        </div>
+
+        {showSidebar && isMobile ? (
+          <>
+            <button
+              type="button"
+              aria-label="Close module sidebar"
+              onClick={() => setMobileSidebarOpen(false)}
+              className={`fixed inset-0 z-40 bg-black/35 transition-opacity ${mobileSidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
+            />
+            <aside
+              className={`fixed left-0 top-0 z-50 h-full w-[86vw] max-w-[360px] bg-background p-[var(--space-16)] shadow-[var(--shadow-lg)] transition-transform duration-200 ${mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
+            >
+              <div className="mb-[var(--space-12)] flex items-center justify-between">
+                <p className="ui-type-section-title text-[var(--neutral-text)]">{activeModule?.name ?? "Module"}</p>
+                <Button type="button" variant="outline" size="sm" onClick={() => setMobileSidebarOpen(false)}>
+                  Close
+                </Button>
               </div>
-            </div>
-          </aside>
+              <ModuleSidebar moduleName={activeModule?.name ?? "Module"} groups={moduleSidebarGroups} />
+            </aside>
+          </>
         ) : null}
 
-        <div className="flex min-h-[calc(100vh-2rem)] min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <header className="border-b border-slate-200 px-4 py-3 sm:px-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="min-w-0">
-                <Link
-                  href="/directory"
-                  className="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold tracking-tight text-slate-800 transition-colors hover:border-slate-300 hover:bg-slate-50"
-                >
-                  {BRANDING.name}
-                </Link>
-                <div className="mt-2 truncate text-lg font-semibold tracking-tight text-slate-900">{topTitle}</div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {showSidebar && isMobile ? (
-                  <button
-                    type="button"
-                    onClick={() => setMobileSidebarOpen(true)}
-                    className="inline-flex h-9 items-center rounded-lg border border-slate-200 px-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-600 transition-colors hover:border-slate-300"
-                  >
-                    Module Menu
-                  </button>
-                ) : null}
-
-                <Link
-                  href="/directory"
-                  className="inline-flex h-9 items-center rounded-lg border border-slate-200 px-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-600 transition-colors hover:border-slate-300"
-                >
-                  Launcher
-                </Link>
-
-                <button
-                  type="button"
-                  onClick={() => updatePreferences({ copilot_enabled: !preferences.copilot_enabled })}
-                  className={`inline-flex h-9 items-center rounded-lg border px-3 text-xs font-semibold uppercase tracking-[0.14em] transition-colors ${
-                    preferences.copilot_enabled
-                      ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                      : "border-slate-300 bg-slate-100 text-slate-700"
-                  }`}
-                >
-                  Tanner {preferences.copilot_enabled ? "On" : "Off"}
-                </button>
-
-                <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-900 text-[11px] font-semibold text-white">
-                    {userInitials}
-                  </span>
-                  <span className="hidden sm:block">
-                    <span className="block text-xs font-semibold text-slate-900">
-                      {currentUser?.full_name || currentUser?.email || "Session User"}
-                    </span>
-                    <span className="block text-[11px] text-slate-500">{currentUser?.role || "member"}</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleSignOut}
-                    className="rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
-                  >
-                    Sign Out
-                  </button>
-                </div>
-              </div>
-            </div>
-          </header>
-
-          <main className={`flex-1 overflow-auto ${isCallCenterTheme ? "px-4 py-4" : "px-5 py-5 sm:px-6 sm:py-6"}`}>
-            {children}
-          </main>
-
-          <footer className="border-t border-slate-200 px-5 py-3 text-xs text-slate-500">{BRANDING.internalNote}</footer>
-        </div>
+        {preferences.copilot_enabled ? <CopilotDrawer /> : null}
       </div>
-
-      {showSidebar && isMobile ? (
-        <>
-          <button
-            type="button"
-            aria-label="Close module sidebar"
-            onClick={() => setMobileSidebarOpen(false)}
-            className={`fixed inset-0 z-40 bg-slate-900/40 transition-opacity ${mobileSidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
-          />
-          <aside
-            className={`fixed left-0 top-0 z-50 h-full w-[82vw] max-w-[320px] border-r border-slate-800 bg-[var(--ui-nav-bg)] p-3 text-slate-200 shadow-xl transition-transform duration-200 ${
-              mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
-            }`}
-          >
-            <div className="mb-2 flex items-center justify-between">
-              <div className="text-sm font-semibold text-white">{activeModule?.name}</div>
-              <button
-                type="button"
-                onClick={() => setMobileSidebarOpen(false)}
-                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300"
-              >
-                Close
-              </button>
-            </div>
-            <nav className="space-y-1">
-              {moduleNavItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  target={item.external ? "_blank" : undefined}
-                  rel={item.external ? "noopener noreferrer" : undefined}
-                  onClick={() => setMobileSidebarOpen(false)}
-                  className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${
-                    pathname === item.href || pathname?.startsWith(`${item.href}/`)
-                      ? "bg-white/10 text-white"
-                      : "text-slate-300 hover:bg-white/5 hover:text-white"
-                  }`}
-                >
-                  <NavGlyph label={item.label} />
-                  <span>{item.label}</span>
-                </Link>
-              ))}
-            </nav>
-          </aside>
-        </>
-      ) : null}
-
-      {preferences.copilot_enabled ? <CopilotDrawer /> : null}
-    </div>
+    </AppLayoutConfigContext.Provider>
   );
 }

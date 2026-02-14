@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ApiError } from "@/lib/api";
+import { AppLayoutPageConfig } from "@/lib/app-layout-config";
 import { ModuleId, defaultRouteForModule, getModuleById, isModuleId } from "@/lib/modules";
 import { fetchMePreferences, patchMePreferences } from "@/lib/preferences";
 
@@ -85,6 +86,14 @@ export default function DirectoryPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+      <AppLayoutPageConfig
+        pageTitle="Organizational Directory"
+        subtitle="Select a system zone to launch a focused module workspace."
+        showSearch={true}
+        searchPlaceholder="Search modules"
+        showSidebar={false}
+      />
+
       <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white px-6 py-6 shadow-sm">
         <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Organizational Directory</h1>
         <p className="mt-2 text-sm text-slate-600">Select a system zone to launch a focused module workspace.</p>

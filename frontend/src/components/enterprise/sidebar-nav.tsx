@@ -8,6 +8,7 @@ export type SidebarNavItem = {
   description?: string;
   badge?: string;
   href?: string;
+  external?: boolean;
   active?: boolean;
   disabled?: boolean;
   onSelect?: () => void;
@@ -63,7 +64,13 @@ function SidebarNavEntry({ item }: { item: SidebarNavItem }) {
 
   if (item.href && !item.disabled) {
     return (
-      <Link href={item.href} className={itemClasses(item)} data-testid={item.testId}>
+      <Link
+        href={item.href}
+        target={item.external ? "_blank" : undefined}
+        rel={item.external ? "noopener noreferrer" : undefined}
+        className={itemClasses(item)}
+        data-testid={item.testId}
+      >
         {content}
       </Link>
     );
@@ -104,4 +111,3 @@ export function SidebarNav({ groups, className, testId }: SidebarNavProps) {
     </nav>
   );
 }
-
