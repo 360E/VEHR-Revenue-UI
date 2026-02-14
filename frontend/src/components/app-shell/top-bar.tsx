@@ -42,6 +42,25 @@ export function TopBar({
   onOpenMobileSidebar,
   className,
 }: TopBarProps) {
+  const brandNode = productHref ? (
+    <Link
+      href={productHref}
+      data-testid="topbar-brand"
+      className="inline-flex flex-none items-center gap-[var(--space-8)] whitespace-nowrap rounded-full bg-[var(--brand-primary-50)] px-[var(--space-12)] py-[var(--space-6)] text-[15px] font-bold text-[var(--brand-primary-600)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--brand-primary)_18%,white)] transition-colors hover:bg-[color-mix(in_srgb,var(--brand-primary-50)_72%,white)]"
+    >
+      <BrandLogo size={20} />
+      <span>{productName}</span>
+    </Link>
+  ) : (
+    <span
+      data-testid="topbar-brand"
+      className="inline-flex flex-none items-center gap-[var(--space-8)] whitespace-nowrap rounded-full bg-[var(--brand-primary-50)] px-[var(--space-12)] py-[var(--space-6)] text-[15px] font-bold text-[var(--brand-primary-600)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--brand-primary)_18%,white)]"
+    >
+      <BrandLogo size={20} />
+      <span>{productName}</span>
+    </span>
+  );
+
   return (
     <header
       className={cn(
@@ -49,68 +68,52 @@ export function TopBar({
         className,
       )}
     >
-      <div className="relative z-10 flex flex-col gap-[var(--space-12)] lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0 flex-1">
-          <p className="flex items-center gap-[var(--space-6)] text-[11px] font-medium text-[var(--neutral-muted)]">
-            {productHref ? (
-              <Link
-                href={productHref}
-                className="inline-flex items-center gap-[var(--space-6)] rounded-[var(--radius-6)] px-[var(--space-4)] py-[2px] text-[var(--neutral-text)] transition-colors hover:bg-[var(--muted)]"
-              >
-                <BrandLogo size={18} />
-                {productName}
-              </Link>
-            ) : (
-              <span className="inline-flex items-center gap-[var(--space-6)]">
-                <BrandLogo size={18} />
-                {productName}
-              </span>
-            )}
-            <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>{moduleLabel ?? "Workspace"}</span>
+      <div className="relative z-10 flex flex-col gap-[var(--space-12)]">
+        <div className="flex flex-wrap items-center justify-between gap-[var(--space-8)]">
+          <p className="flex min-w-0 flex-wrap items-center gap-[var(--space-6)] text-[11px] font-medium text-[var(--neutral-muted)]">
+            {brandNode}
+            <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="truncate">{moduleLabel ?? "Workspace"}</span>
           </p>
-
-          <div className="mt-[var(--space-4)] flex items-center gap-[var(--space-8)]">
-            {showMobileSidebarButton ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={onOpenMobileSidebar}
-                className="lg:hidden"
-              >
-                Menu
-              </Button>
-            ) : null}
-            <h1 className="ui-type-section-title truncate text-[var(--neutral-text)]">{pageTitle}</h1>
-          </div>
-          {subtitle ? (
-            <p className="ui-type-body mt-[var(--space-4)] line-clamp-1 text-[var(--neutral-muted)]">{subtitle}</p>
-          ) : null}
+          {utilitySlot ? <div className="flex flex-wrap items-center gap-[var(--space-8)]">{utilitySlot}</div> : null}
         </div>
 
-        {showSearch ? (
-          <div className="w-full lg:w-auto">
-            <div className="relative w-full max-w-[420px] lg:min-w-[320px]">
-              <Search className="pointer-events-none absolute left-[var(--space-12)] top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--neutral-muted)]" />
-              <Input
-                value={searchQuery}
-                onChange={(event) => onSearchQueryChange(event.target.value)}
-                placeholder={searchPlaceholder}
-                aria-label="Global search"
-                className="h-9 pl-[36px]"
-              />
+        <div className="flex flex-col gap-[var(--space-12)] lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="mt-[var(--space-4)] flex items-center gap-[var(--space-8)]">
+              {showMobileSidebarButton ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onOpenMobileSidebar}
+                  className="lg:hidden"
+                >
+                  Menu
+                </Button>
+              ) : null}
+              <h1 className="ui-type-section-title truncate text-[var(--neutral-text)]">{pageTitle}</h1>
             </div>
+            {subtitle ? (
+              <p className="ui-type-body mt-[var(--space-4)] line-clamp-1 text-[var(--neutral-muted)]">{subtitle}</p>
+            ) : null}
           </div>
-        ) : null}
 
-        <div className="flex flex-wrap items-center justify-end gap-[var(--space-8)]">
-          {actions ? (
-            <div className="flex flex-wrap items-center gap-[var(--space-8)] border-r border-[var(--neutral-border)] pr-[var(--space-8)]">
-              {actions}
-            </div>
-          ) : null}
-          {utilitySlot ? <div className="flex flex-wrap items-center gap-[var(--space-8)]">{utilitySlot}</div> : null}
+          <div className="flex min-w-0 flex-1 items-center justify-end gap-[var(--space-8)]">
+            {showSearch ? (
+              <div className="relative min-w-[240px] flex-1 lg:max-w-[540px]">
+                <Search className="pointer-events-none absolute left-[var(--space-12)] top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--neutral-muted)]" />
+                <Input
+                  value={searchQuery}
+                  onChange={(event) => onSearchQueryChange(event.target.value)}
+                  placeholder={searchPlaceholder}
+                  aria-label="Global search"
+                  className="h-9 pl-[36px]"
+                />
+              </div>
+            ) : null}
+            {actions ? <div className="flex flex-wrap items-center gap-[var(--space-8)]">{actions}</div> : null}
+          </div>
         </div>
       </div>
     </header>

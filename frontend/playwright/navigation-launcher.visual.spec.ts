@@ -79,6 +79,47 @@ async function mockAppShell(page: Page) {
       ]),
     });
   });
+
+  await page.route(new RegExp(`${baseApi}/api/v1/tasks(\\?.*)?$`), async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [],
+        total: 0,
+        limit: 200,
+        offset: 0,
+        counts: {},
+      }),
+    });
+  });
+
+  await page.route(`${baseApi}/api/v1/audit/summary?hours=72`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        window_hours: 72,
+        total_events: 6,
+      }),
+    });
+  });
+
+  await page.route(`${baseApi}/api/v1/audit/anomalies?hours=72&limit=20`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([]),
+    });
+  });
+
+  await page.route(`${baseApi}/api/v1/audit/events?limit=20`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([]),
+    });
+  });
 }
 
 test("launcher tiles visual and full-tile navigation", async ({ page }) => {
@@ -103,4 +144,14 @@ test("sidebar visual uses strong theme without letter icon blocks", async ({ pag
     page.locator("nav[aria-label='Section navigation'] span[class*='h-7'][class*='w-7']"),
   ).toHaveCount(0);
   await expect(page).toHaveScreenshot("sidebar-clients-theme.png", { fullPage: true });
+});
+
+test("operations hub header brand is visible and only one nav rail is shown", async ({ page }) => {
+  await mockAppShell(page);
+
+  await page.goto("/dashboard");
+  await expect(page.getByTestId("topbar-brand")).toBeVisible();
+  await expect(page.locator("[data-testid='operations-command-nav']")).toHaveCount(0);
+  await expect(page.locator("nav[aria-label='Section navigation']")).toHaveCount(1);
+  await expect(page).toHaveScreenshot("operations-hub-single-rail.png", { fullPage: true });
 });

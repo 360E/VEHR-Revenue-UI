@@ -7,7 +7,6 @@ import { CircleDollarSign } from "lucide-react";
 import MetricCard from "../_components/MetricCard";
 import { DataListRow } from "@/components/enterprise/data-list-row";
 import { SectionCard } from "@/components/enterprise/section-card";
-import { SidebarNav, type SidebarNavGroup } from "@/components/enterprise/sidebar-nav";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -499,54 +498,6 @@ export default function DashboardPage() {
     return overdueCount + highRiskAnomalyCount + mediumRiskAnomalyCount;
   }, [highRiskAnomalyCount, mediumRiskAnomalyCount, tasks]);
 
-  const commandNavGroups = useMemo<SidebarNavGroup[]>(() => {
-    return [
-      {
-        id: "clinical",
-        label: "Clinical",
-        items: [
-          { id: "clinical-clients", label: "Clients", href: "/clients" },
-          { id: "clinical-forms", label: "Forms", href: "/forms" },
-          { id: "clinical-documents", label: "Documents", href: "/documents" },
-        ],
-      },
-      {
-        id: "revenue",
-        label: "Revenue",
-        items: [
-          { id: "revenue-billing", label: "Billing", href: "/billing" },
-          { id: "revenue-reports", label: "Reports", href: "/reports" },
-        ],
-      },
-      {
-        id: "operations",
-        label: "Operations",
-        items: [
-          { id: "ops-command", label: "Command Center", href: "/dashboard", active: true },
-          { id: "ops-calls", label: "Calls & Reception", href: "/calls-reception" },
-          { id: "ops-tasks", label: "Tasks", href: "/tasks" },
-        ],
-      },
-      {
-        id: "compliance",
-        label: "Compliance",
-        items: [
-          { id: "comp-audit", label: "Audit Center", href: "/audit-center" },
-          { id: "comp-workbench", label: "Compliance", href: "/compliance" },
-        ],
-      },
-      {
-        id: "system",
-        label: "System",
-        items: [
-          { id: "sys-admin", label: "Admin Center", href: "/admin-center" },
-          { id: "sys-integrations", label: "Integrations", href: "/integrations" },
-          { id: "sys-org-settings", label: "Organization Settings", href: "/organization/settings" },
-        ],
-      },
-    ];
-  }, []);
-
   async function handleCreateTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!createForm.title.trim()) {
@@ -600,25 +551,21 @@ export default function DashboardPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-[var(--space-16)] lg:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="space-y-[var(--space-16)]">
-          <SidebarNav groups={commandNavGroups} testId="operations-command-nav" />
-          <SectionCard title="Data Coverage" description="Only connected data sources are shown below.">
-            <div className="space-y-[var(--space-8)]">
-              <p className="ui-type-body text-[var(--neutral-muted)]">
-                Active sources: patients, tasks{auditSummary || auditAnomalies || auditEvents ? ", audit." : "."}
+      <section className="min-w-0 space-y-[var(--space-16)]" data-testid="operations-command-main">
+        <SectionCard title="Data Coverage" description="Only connected data sources are shown below.">
+          <div className="space-y-[var(--space-8)]">
+            <p className="ui-type-body text-[var(--neutral-muted)]">
+              Active sources: patients, tasks{auditSummary || auditAnomalies || auditEvents ? ", audit." : "."}
+            </p>
+            {!auditSummary && !auditAnomalies && !auditEvents ? (
+              <p className="ui-type-meta text-[var(--status-attention)]">
+                TODO: audit-backed metrics require audit:read permission.
               </p>
-              {!auditSummary && !auditAnomalies && !auditEvents ? (
-                <p className="ui-type-meta text-[var(--status-attention)]">
-                  TODO: audit-backed metrics require audit:read permission.
-                </p>
-              ) : null}
-            </div>
-          </SectionCard>
-        </aside>
+            ) : null}
+          </div>
+        </SectionCard>
 
-        <section className="min-w-0 space-y-[var(--space-16)]">
-          <div className="grid gap-[var(--space-16)] sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-[var(--space-16)] sm:grid-cols-2 xl:grid-cols-4">
             <MetricCard label="Active Clients" value={`${clients.length}`} hint="Live patient registry" tone="info" />
             <MetricCard
               label="Pending Claims"
@@ -651,91 +598,90 @@ export default function DashboardPage() {
                       : "success"
               }
             />
-          </div>
+        </div>
 
-          <div className="grid gap-[var(--space-16)] xl:grid-cols-2">
-            <SectionCard title="Client Risk Alerts" description="Patient-linked risk cues for rapid chart review." testId="client-risk-alerts">
-              <div className="space-y-[var(--space-8)]">
-                {filteredRiskAlerts.length === 0 ? (
-                  <p className="ui-type-body text-[var(--neutral-muted)]">No client risk alerts match the current search.</p>
-                ) : (
-                  filteredRiskAlerts.map((alert) => (
-                    <div
-                      key={alert.id}
-                      className="rounded-[var(--radius-6)] border border-[var(--neutral-border)] bg-[var(--neutral-panel)] px-[var(--space-12)] py-[var(--space-12)] transition-colors hover:bg-[var(--muted)]"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-[var(--space-12)]">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-[var(--space-8)]">
-                            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-6)] bg-[var(--accent)] text-[length:var(--font-size-12)] font-semibold text-[var(--accent-foreground)]">
-                              {initialsFromName(alert.displayName)}
-                            </span>
-                            <p className="truncate text-[length:var(--font-size-14)] font-semibold text-[var(--neutral-text)]">
-                              {alert.displayName}
-                            </p>
-                          </div>
-                          <p className="ui-type-body mt-[var(--space-8)] text-[var(--neutral-muted)]">{alert.reason}</p>
-                        </div>
-
-                        <div className="flex items-center gap-[var(--space-8)]">
-                          <span className={`ui-status-pill ${severityChipClass(alert.severityTone)}`}>{alert.severityLabel}</span>
-                          {alert.clientId ? (
-                            <Button type="button" variant="outline" size="sm" asChild>
-                              <Link href={`/patients/${encodeURIComponent(alert.clientId)}`}>View Chart</Link>
-                            </Button>
-                          ) : (
-                            <span className="ui-type-meta">TODO</span>
-                          )}
-                        </div>
-                      </div>
-                      {alert.isPlaceholder ? <p className="ui-type-meta mt-[var(--space-8)] text-[var(--status-attention)]">TODO placeholder</p> : null}
-                    </div>
-                  ))
-                )}
-              </div>
-            </SectionCard>
-
-            <SectionCard title="Revenue Integrity" description="Claims and reimbursement quality checkpoints." testId="revenue-integrity-list">
-              <div className="space-y-[var(--space-8)]">
-                {filteredRevenueSignals.map((item) => (
-                  <DataListRow
-                    key={item.id}
-                    title={item.label}
-                    description={item.detail}
-                    statusLabel={item.countLabel}
-                    statusTone={item.tone}
-                    actions={
-                      <Button type="button" variant="outline" size="sm" asChild>
-                        <Link href="/billing">Open Billing</Link>
-                      </Button>
-                    }
-                  />
-                ))}
-                {filteredRevenueSignals.length === 0 ? (
-                  <p className="ui-type-body text-[var(--neutral-muted)]">No revenue signals match the current search.</p>
-                ) : null}
-              </div>
-            </SectionCard>
-          </div>
-
-          <SectionCard title="Compliance Activity Feed" description="Human-readable governance events for operational follow-up." testId="compliance-activity-feed">
+        <div className="grid gap-[var(--space-16)] xl:grid-cols-2">
+          <SectionCard title="Client Risk Alerts" description="Patient-linked risk cues for rapid chart review." testId="client-risk-alerts">
             <div className="space-y-[var(--space-8)]">
-              {filteredComplianceFeed.map((item) => (
+              {filteredRiskAlerts.length === 0 ? (
+                <p className="ui-type-body text-[var(--neutral-muted)]">No client risk alerts match the current search.</p>
+              ) : (
+                filteredRiskAlerts.map((alert) => (
+                  <div
+                    key={alert.id}
+                    className="rounded-[var(--radius-6)] border border-[var(--neutral-border)] bg-[var(--neutral-panel)] px-[var(--space-12)] py-[var(--space-12)] transition-colors hover:bg-[var(--muted)]"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-[var(--space-12)]">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-[var(--space-8)]">
+                          <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-6)] bg-[var(--accent)] text-[length:var(--font-size-12)] font-semibold text-[var(--accent-foreground)]">
+                            {initialsFromName(alert.displayName)}
+                          </span>
+                          <p className="truncate text-[length:var(--font-size-14)] font-semibold text-[var(--neutral-text)]">
+                            {alert.displayName}
+                          </p>
+                        </div>
+                        <p className="ui-type-body mt-[var(--space-8)] text-[var(--neutral-muted)]">{alert.reason}</p>
+                      </div>
+
+                      <div className="flex items-center gap-[var(--space-8)]">
+                        <span className={`ui-status-pill ${severityChipClass(alert.severityTone)}`}>{alert.severityLabel}</span>
+                        {alert.clientId ? (
+                          <Button type="button" variant="outline" size="sm" asChild>
+                            <Link href={`/patients/${encodeURIComponent(alert.clientId)}`}>View Chart</Link>
+                          </Button>
+                        ) : (
+                          <span className="ui-type-meta">TODO</span>
+                        )}
+                      </div>
+                    </div>
+                    {alert.isPlaceholder ? <p className="ui-type-meta mt-[var(--space-8)] text-[var(--status-attention)]">TODO placeholder</p> : null}
+                  </div>
+                ))
+              )}
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Revenue Integrity" description="Claims and reimbursement quality checkpoints." testId="revenue-integrity-list">
+            <div className="space-y-[var(--space-8)]">
+              {filteredRevenueSignals.map((item) => (
                 <DataListRow
                   key={item.id}
-                  title={item.summary}
-                  meta={item.metadata}
-                  statusLabel="Logged"
-                  statusTone="informational"
+                  title={item.label}
+                  description={item.detail}
+                  statusLabel={item.countLabel}
+                  statusTone={item.tone}
+                  actions={
+                    <Button type="button" variant="outline" size="sm" asChild>
+                      <Link href="/billing">Open Billing</Link>
+                    </Button>
+                  }
                 />
               ))}
-              {filteredComplianceFeed.length === 0 ? (
-                <p className="ui-type-body text-[var(--neutral-muted)]">No compliance events match the current search.</p>
+              {filteredRevenueSignals.length === 0 ? (
+                <p className="ui-type-body text-[var(--neutral-muted)]">No revenue signals match the current search.</p>
               ) : null}
             </div>
           </SectionCard>
-        </section>
-      </div>
+        </div>
+
+        <SectionCard title="Compliance Activity Feed" description="Human-readable governance events for operational follow-up." testId="compliance-activity-feed">
+          <div className="space-y-[var(--space-8)]">
+            {filteredComplianceFeed.map((item) => (
+              <DataListRow
+                key={item.id}
+                title={item.summary}
+                meta={item.metadata}
+                statusLabel="Logged"
+                statusTone="informational"
+              />
+            ))}
+            {filteredComplianceFeed.length === 0 ? (
+              <p className="ui-type-body text-[var(--neutral-muted)]">No compliance events match the current search.</p>
+            ) : null}
+          </div>
+        </SectionCard>
+      </section>
 
       {isCreateOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 px-4">
