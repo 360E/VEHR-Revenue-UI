@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch } from "@/lib/api";
+import { BRANDING } from "@/lib/branding";
 
 type SummaryResponse = {
   window_hours: number;
@@ -38,7 +39,7 @@ export default function ReportsPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="space-y-3">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-400">Encompass 360</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-400">{BRANDING.name}</p>
         <h1 className="text-[2rem] font-semibold tracking-tight text-slate-900">Reports</h1>
         <p className="text-sm text-slate-500">Operational summaries and activity snapshots.</p>
       </div>

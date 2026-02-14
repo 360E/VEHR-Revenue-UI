@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ReactNode } from "react";
 import { ChevronRight, Search } from "lucide-react";
 
+import { BrandLogo } from "@/components/brand/brand-logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -49,12 +50,16 @@ export function TopBar({
             {productHref ? (
               <Link
                 href={productHref}
-                className="rounded-[var(--radius-4)] px-[var(--space-4)] py-[2px] text-[var(--neutral-text)] transition-colors hover:bg-[var(--muted)]"
+                className="inline-flex items-center gap-[var(--space-6)] rounded-[var(--radius-6)] px-[var(--space-4)] py-[2px] text-[var(--neutral-text)] transition-colors hover:bg-[var(--muted)]"
               >
+                <BrandLogo size={18} />
                 {productName}
               </Link>
             ) : (
-              <span>{productName}</span>
+              <span className="inline-flex items-center gap-[var(--space-6)]">
+                <BrandLogo size={18} />
+                {productName}
+              </span>
             )}
             <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
             <span>{moduleLabel ?? "Workspace"}</span>

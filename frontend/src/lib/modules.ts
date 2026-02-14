@@ -187,6 +187,13 @@ export function pageTitleForPath(pathname: string | null | undefined, moduleId: 
     return "Organizational Directory";
   }
 
+  if (pathname === "/sharepoint" || pathname.startsWith("/sharepoint/")) {
+    return "Organization Information";
+  }
+  if (pathname === "/organization/home" || pathname.startsWith("/organization/home/")) {
+    return "Organization Information";
+  }
+
   const moduleDef = getModuleById(moduleId);
   for (const item of moduleDef.navItems) {
     if (!item.external && (pathname === item.href || pathname.startsWith(`${item.href}/`))) {

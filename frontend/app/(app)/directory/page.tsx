@@ -12,6 +12,15 @@ import { AppLayoutPageConfig, useAppLayoutConfig } from "@/lib/app-layout-config
 import { ModuleId, defaultRouteForModule, getModuleById, isModuleId } from "@/lib/modules";
 import { fetchMePreferences, patchMePreferences } from "@/lib/preferences";
 
+type DirectoryTile = {
+  key: string;
+  moduleId: ModuleId;
+  title: string;
+  description: string;
+  testId: string;
+  open: () => Promise<void>;
+};
+
 export default function DirectoryPage() {
   const { searchQuery } = useAppLayoutConfig();
   const router = useRouter();
@@ -19,7 +28,7 @@ export default function DirectoryPage() {
   const [lastActiveModule, setLastActiveModule] = useState<ModuleId | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [launchingModule, setLaunchingModule] = useState<ModuleId | null>(null);
+  const [launchingTileKey, setLaunchingTileKey] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -53,15 +62,51 @@ export default function DirectoryPage() {
     };
   }, []);
 
-  const visibleTiles = useMemo(() => {
-    return allowedModules.map((moduleId) => getModuleById(moduleId));
-  }, [allowedModules]);
+  const hasAdministrationAccess = useMemo(
+    () => allowedModules.includes("administration"),
+    [allowedModules],
+  );
+
+  const visibleTiles = useMemo<DirectoryTile[]>(() => {
+    const moduleTiles: DirectoryTile[] = allowedModules.map((moduleId) => {
+      const moduleDef = getModuleById(moduleId);
+      return {
+        key: moduleDef.id,
+        moduleId: moduleDef.id,
+        title: moduleDef.name,
+        description: moduleDef.description,
+        testId: `directory-module-${moduleDef.id}`,
+        open: async () => {
+          setLaunchingTileKey(moduleDef.id);
+          await patchMePreferences({ last_active_module: moduleDef.id });
+          router.push(defaultRouteForModule(moduleDef.id));
+        },
+      };
+    });
+
+    if (hasAdministrationAccess) {
+      moduleTiles.push({
+        key: "sharepoint",
+        moduleId: "administration",
+        title: "SharePoint",
+        description: "Organization Information and SharePoint portal access.",
+        testId: "directory-module-sharepoint",
+        open: async () => {
+          setLaunchingTileKey("sharepoint");
+          await patchMePreferences({ last_active_module: "administration" });
+          router.push("/sharepoint");
+        },
+      });
+    }
+
+    return moduleTiles;
+  }, [allowedModules, hasAdministrationAccess, router]);
 
   const filteredTiles = useMemo(() => {
     const normalized = searchQuery.trim().toLowerCase();
     if (!normalized) return visibleTiles;
     return visibleTiles.filter((tile) =>
-      `${tile.name} ${tile.description}`.toLowerCase().includes(normalized),
+      `${tile.title} ${tile.description}`.toLowerCase().includes(normalized),
     );
   }, [searchQuery, visibleTiles]);
 
@@ -83,7 +128,7 @@ export default function DirectoryPage() {
 
   async function enterModule(moduleId: ModuleId) {
     try {
-      setLaunchingModule(moduleId);
+      setLaunchingTileKey(moduleId);
       await patchMePreferences({ last_active_module: moduleId });
       router.push(defaultRouteForModule(moduleId));
     } catch (launchError) {
@@ -93,7 +138,7 @@ export default function DirectoryPage() {
         setError("Failed to enter module");
       }
     } finally {
-      setLaunchingModule(null);
+      setLaunchingTileKey(null);
     }
   }
 
@@ -140,9 +185,9 @@ export default function DirectoryPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => enterModule(moduleDef.id)}
-                    disabled={launchingModule === moduleDef.id}
+                    disabled={launchingTileKey === moduleDef.id}
                   >
-                    {launchingModule === moduleDef.id ? `Opening ${moduleDef.name}...` : moduleDef.name}
+                    {launchingTileKey === moduleDef.id ? `Opening ${moduleDef.name}...` : moduleDef.name}
                   </Button>
                 );
               })}
@@ -168,13 +213,27 @@ export default function DirectoryPage() {
           <div className="grid grid-cols-1 gap-[var(--space-16)] md:grid-cols-2 xl:grid-cols-3" data-testid="directory-module-grid">
             {filteredTiles.map((tile) => (
               <ModuleTileCard
-                key={tile.id}
-                moduleId={tile.id}
-                title={tile.name}
+                key={tile.key}
+                moduleId={tile.moduleId}
+                title={tile.title}
                 description={tile.description}
-                onOpen={() => enterModule(tile.id)}
-                isOpening={launchingModule === tile.id}
-                testId={`directory-module-${tile.id}`}
+                onOpen={() => {
+                  void (async () => {
+                    try {
+                      await tile.open();
+                    } catch (launchError) {
+                      if (launchError instanceof ApiError || launchError instanceof Error) {
+                        setError(launchError.message);
+                      } else {
+                        setError("Failed to enter module");
+                      }
+                    } finally {
+                      setLaunchingTileKey(null);
+                    }
+                  })();
+                }}
+                isOpening={launchingTileKey === tile.key}
+                testId={tile.testId}
               />
             ))}
           </div>

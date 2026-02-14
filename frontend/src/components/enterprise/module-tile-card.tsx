@@ -1,5 +1,5 @@
 import { ModuleId } from "@/lib/modules";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
@@ -55,36 +55,44 @@ export function ModuleTileCard({
   className,
 }: ModuleTileCardProps) {
   return (
-    <Card
-      className={cn(
-        "relative flex h-full flex-col overflow-hidden border border-[var(--neutral-border)] bg-[var(--neutral-panel)] shadow-sm transition-shadow duration-150 hover:shadow-md",
-        className,
-      )}
+    <button
+      type="button"
+      onClick={onOpen}
+      disabled={isOpening}
+      className={cn("h-full w-full rounded-xl text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1", className)}
       data-testid={testId}
+      aria-label={`Open ${title}`}
     >
-      <span className={cn("absolute inset-x-0 top-0 h-[3px]", ACCENT_BAR_CLASS[moduleId])} aria-hidden="true" />
-      <CardHeader className="pb-[var(--space-8)]">
-        <div className="flex items-start gap-[var(--space-12)]">
-          <span
-            className={cn(
-              "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-8)] border text-[length:var(--font-size-12)] font-semibold",
-              ACCENT_BADGE_CLASS[moduleId],
-            )}
-            aria-hidden="true"
-          >
-            {initialsFromLabel(title)}
-          </span>
-          <div className="min-w-0 space-y-[var(--space-4)]">
-            <CardTitle className="ui-type-section-title text-[var(--neutral-text)]">{title}</CardTitle>
-            <p className="ui-type-body line-clamp-2 text-[var(--neutral-muted)]">{description}</p>
+      <Card
+        className={cn(
+          "relative flex h-full flex-col overflow-hidden border border-[var(--neutral-border)] bg-[var(--neutral-panel)]",
+          isOpening ? "opacity-75" : "",
+        )}
+      >
+        <span className={cn("absolute inset-x-0 top-0 h-[3px]", ACCENT_BAR_CLASS[moduleId])} aria-hidden="true" />
+        <CardHeader className="pb-[var(--space-8)]">
+          <div className="flex items-start gap-[var(--space-12)]">
+            <span
+              className={cn(
+                "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-8)] border text-[length:var(--font-size-12)] font-semibold",
+                ACCENT_BADGE_CLASS[moduleId],
+              )}
+              aria-hidden="true"
+            >
+              {initialsFromLabel(title)}
+            </span>
+            <div className="min-w-0 space-y-[var(--space-4)]">
+              <CardTitle className="ui-type-section-title text-[var(--neutral-text)]">{title}</CardTitle>
+              <p className="ui-type-body line-clamp-2 text-[var(--neutral-muted)]">{description}</p>
+            </div>
           </div>
-        </div>
-      </CardHeader>
-      <CardContent className="mt-auto pt-0">
-        <Button type="button" size="sm" onClick={onOpen} disabled={isOpening}>
-          {isOpening ? "Opening..." : "Open"}
-        </Button>
-      </CardContent>
-    </Card>
+        </CardHeader>
+        <CardContent className="mt-auto pt-0">
+          <span className={cn(buttonVariants({ size: "sm" }), "pointer-events-none")}>
+            {isOpening ? "Opening..." : "Open"}
+          </span>
+        </CardContent>
+      </Card>
+    </button>
   );
 }

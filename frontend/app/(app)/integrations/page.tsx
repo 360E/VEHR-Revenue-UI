@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ExternalLink } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
+import { IntegrationStatusCard } from "@/components/enterprise/integration-status-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import MetricCard from "../_components/MetricCard";
-import { ApiError, apiFetch, buildUrl } from "@/lib/api";
+import { apiFetch, buildUrl } from "@/lib/api";
+import { AppLayoutPageConfig } from "@/lib/app-layout-config";
 
 type ConnectorCapability = {
   key: string;
@@ -37,8 +38,6 @@ type MicrosoftConnectResponse = {
 type RingCentralStatus = {
   connected: boolean;
   rc_account_id?: string | null;
-  rc_extension_id?: string | null;
-  expires_at?: string | null;
 };
 
 export default function IntegrationsPage() {
@@ -82,13 +81,12 @@ export default function IntegrationsPage() {
 
   useEffect(() => {
     const connected = searchParams.get("connected");
-    const err = searchParams.get("err");
     if (connected === "1") {
       setRingCentralError(null);
       return;
     }
     if (connected === "0") {
-      setRingCentralError(err ? `RingCentral OAuth failed (${err}).` : "RingCentral OAuth failed.");
+      setRingCentralError("RingCentral connection could not be completed. Please try again.");
     }
   }, [searchParams]);
 
@@ -106,12 +104,8 @@ export default function IntegrationsPage() {
         throw new Error("Microsoft authorization URL was not returned.");
       }
       window.location.assign(response.authorization_url);
-    } catch (connectError) {
-      if (connectError instanceof ApiError || connectError instanceof Error) {
-        setMicrosoftConnectError(connectError.message || "Unable to start Microsoft connection.");
-      } else {
-        setMicrosoftConnectError("Unable to start Microsoft connection.");
-      }
+    } catch {
+      setMicrosoftConnectError("Unable to start Microsoft connection.");
       setIsConnectingMicrosoft(false);
     }
   }
@@ -123,62 +117,56 @@ export default function IntegrationsPage() {
       const returnTo = `${window.location.origin}/integrations`;
       const connectUrl = `${buildUrl("/api/v1/integrations/ringcentral/connect")}?return_to=${encodeURIComponent(returnTo)}`;
       window.location.assign(connectUrl);
-    } catch (connectError) {
-      if (connectError instanceof ApiError || connectError instanceof Error) {
-        setRingCentralError(connectError.message || "Unable to start RingCentral connection.");
-      } else {
-        setRingCentralError("Unable to start RingCentral connection.");
-      }
+    } catch {
+      setRingCentralError("Unable to start RingCentral connection.");
       setIsConnectingRingCentral(false);
     }
   }
 
   return (
     <div className="flex flex-col gap-6">
+      <AppLayoutPageConfig
+        moduleLabel="System"
+        pageTitle="Integrations"
+        subtitle="Connect third-party systems without exposing technical metadata."
+      />
+
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="space-y-2">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-400">
-            Integration Hub
-          </p>
-          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Integration Catalog</h1>
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Connected Systems</h1>
           <p className="text-sm text-slate-600">
-            Provider-agnostic connectors for storage, messaging, telephony, accounting, and identity.
+            Manage organization-level integrations in a simplified view.
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button type="button" onClick={handleConnectRingCentral} disabled={isConnectingRingCentral}>
-            {isConnectingRingCentral ? "Redirecting..." : "Connect RingCentral"}
-            <ExternalLink className="h-4 w-4" />
-          </Button>
-          <Button type="button" variant="outline" onClick={handleConnectMicrosoft} disabled={isConnectingMicrosoft}>
-            {isConnectingMicrosoft ? "Redirecting..." : "Connect Microsoft"}
-            <ExternalLink className="h-4 w-4" />
-          </Button>
         </div>
       </div>
 
-      <Card className="border-slate-200/70 shadow-sm">
-        <CardHeader className="border-b border-slate-200/70 bg-slate-50/70">
-          <CardTitle className="text-base text-slate-900">RingCentral OAuth</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2 pt-5 text-sm text-slate-700">
-          <p>Status: {ringCentralStatus?.connected ? "Connected" : "Not connected"}</p>
-          <p>Account: {ringCentralStatus?.rc_account_id || "n/a"}</p>
-          <p>Extension: {ringCentralStatus?.rc_extension_id || "n/a"}</p>
-          <p>Expires: {ringCentralStatus?.expires_at ? new Date(ringCentralStatus.expires_at).toLocaleString() : "n/a"}</p>
-        </CardContent>
-      </Card>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <IntegrationStatusCard
+          title="RingCentral"
+          provider="ringcentral"
+          connected={Boolean(ringCentralStatus?.connected)}
+          onConnect={() => void handleConnectRingCentral()}
+          isConnecting={isConnectingRingCentral}
+          connectLabel="Connect RingCentral"
+          message={ringCentralError}
+        />
 
-      {microsoftConnectError ? (
-        <Card className="border-rose-200 bg-rose-50/80">
-          <CardContent className="pt-6 text-sm text-rose-700">{microsoftConnectError}</CardContent>
-        </Card>
-      ) : null}
-      {ringCentralError ? (
-        <Card className="border-rose-200 bg-rose-50/80">
-          <CardContent className="pt-6 text-sm text-rose-700">{ringCentralError}</CardContent>
-        </Card>
-      ) : null}
+        <IntegrationStatusCard
+          title="Microsoft SharePoint"
+          provider="sharepoint"
+          connected={false}
+          onConnect={() => void handleConnectMicrosoft()}
+          isConnecting={isConnectingMicrosoft}
+          connectLabel="Connect Microsoft"
+          message={microsoftConnectError}
+          secondaryAction={(
+            <Button type="button" variant="outline" size="sm" asChild>
+              <Link href="/admin/integrations/microsoft">Open</Link>
+            </Button>
+          )}
+        />
+      </div>
+
 
       <div className="grid gap-4 md:grid-cols-3">
         <MetricCard label="Connectors" value={`${catalog?.total ?? 0}`} hint="Available adapters" />
@@ -202,13 +190,11 @@ export default function IntegrationsPage() {
 
       <Card className="border-slate-200/70 shadow-sm">
         <CardHeader className="border-b border-slate-200/70 bg-slate-50/70">
-          <CardTitle className="text-base text-slate-900">Categories</CardTitle>
+          <CardTitle className="text-base text-slate-900">Catalog categories</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2 pt-5">
           {(catalog?.categories ?? []).map((category) => (
-            <Badge key={category} variant="outline" className="rounded-full border-slate-300 px-3 py-1 text-xs">
-              {category.replace("_", " ")}
-            </Badge>
+            <span key={category} className="ui-status-pill ui-status-info">{category.replace("_", " ")}</span>
           ))}
         </CardContent>
       </Card>
@@ -219,39 +205,23 @@ export default function IntegrationsPage() {
             <CardHeader className="border-b border-slate-200/70 bg-slate-50/70">
               <div className="flex items-center justify-between gap-3">
                 <CardTitle className="text-base text-slate-900">{connector.display_name}</CardTitle>
-                <Badge variant="secondary" className="text-[10px] uppercase tracking-[0.2em]">
+                <span className="ui-status-pill ui-status-info">
                   {connector.category.replace("_", " ")}
-                </Badge>
+                </span>
               </div>
             </CardHeader>
             <CardContent className="space-y-4 pt-5">
-              <div className="flex flex-wrap gap-2">
-                {connector.auth_modes.map((mode) => (
-                  <Badge key={`${connector.key}-${mode}`} variant="outline" className="text-[10px] uppercase">
-                    {mode}
-                  </Badge>
-                ))}
-              </div>
               {connector.key === "sharepoint" ? (
                 <Button
                   type="button"
                   variant="outline"
                   className="w-full justify-center"
-                  onClick={handleConnectMicrosoft}
+                  onClick={() => void handleConnectMicrosoft()}
                   disabled={isConnectingMicrosoft}
                 >
                   {isConnectingMicrosoft ? "Redirecting..." : "Connect Microsoft"}
-                  <ExternalLink className="h-4 w-4" />
                 </Button>
               ) : null}
-              <div className="space-y-3">
-                {connector.capabilities.map((capability) => (
-                  <div key={capability.key} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <div className="text-sm font-semibold text-slate-800">{capability.label}</div>
-                    <div className="text-xs text-slate-500">{capability.description}</div>
-                  </div>
-                ))}
-              </div>
             </CardContent>
           </Card>
         ))}

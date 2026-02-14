@@ -15,6 +15,7 @@ import { ApiError, apiFetch } from "@/lib/api";
 import { clearAccessToken } from "@/lib/auth";
 import { AppLayoutConfigContext, type AppLayoutConfig } from "@/lib/app-layout-config";
 import {
+  defaultRouteForModule,
   ModuleId,
   getModuleById,
   listModules,
@@ -54,59 +55,6 @@ function displayRoleLabel(role: string | undefined): string {
     .split("_")
     .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-type EnterpriseNavSection = "Clinical" | "Revenue" | "Operations" | "Compliance" | "System";
-
-const ENTERPRISE_SECTION_ORDER: EnterpriseNavSection[] = [
-  "Clinical",
-  "Revenue",
-  "Operations",
-  "Compliance",
-  "System",
-];
-
-function sectionForNavItem(href: string, label: string): EnterpriseNavSection {
-  const normalizedHref = href.toLowerCase();
-  const normalizedLabel = label.toLowerCase();
-
-  if (
-    normalizedHref.startsWith("/clients")
-    || normalizedHref.startsWith("/forms")
-    || normalizedHref.startsWith("/documents")
-    || normalizedHref.startsWith("/patients")
-    || normalizedHref.startsWith("/encounters")
-  ) {
-    return "Clinical";
-  }
-
-  if (
-    normalizedHref.startsWith("/billing")
-    || normalizedLabel.includes("billing")
-    || normalizedLabel.includes("claim")
-    || normalizedLabel.includes("remittance")
-    || normalizedLabel.includes("revenue")
-  ) {
-    return "Revenue";
-  }
-
-  if (normalizedHref.startsWith("/audit-center") || normalizedHref.startsWith("/compliance")) {
-    return "Compliance";
-  }
-
-  if (
-    normalizedHref.startsWith("/admin")
-    || normalizedHref.startsWith("/organization")
-    || normalizedHref.startsWith("/integrations")
-    || normalizedHref.startsWith("/sharepoint")
-    || normalizedLabel.includes("admin")
-    || normalizedLabel.includes("integration")
-    || normalizedLabel.includes("organization")
-  ) {
-    return "System";
-  }
-
-  return "Operations";
 }
 
 export default function AppLayout({ children }: { children: ReactNode }) {
@@ -178,6 +126,10 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const isDirectory = pathname === "/directory";
   const activeModuleId = resolveModuleForPath(pathname);
   const activeModule = activeModuleId ? getModuleById(activeModuleId) : null;
+  const isSharePointCategoryActive = pathname === "/sharepoint"
+    || pathname?.startsWith("/sharepoint/")
+    || pathname === "/organization/home"
+    || pathname?.startsWith("/organization/home/");
   const isMobile = viewportWidth < 1024;
 
   const grantedPermissions = useMemo(
@@ -189,49 +141,78 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     () => new Set(preferences?.allowed_modules ?? []),
     [preferences?.allowed_modules],
   );
+  const allowedModules = useMemo(
+    () => listModules().filter((moduleDef) => allowedModuleSet.has(moduleDef.id)),
+    [allowedModuleSet],
+  );
 
   const userInitials = useMemo(() => initialsForUser(currentUser), [currentUser]);
 
   const moduleSidebarGroups = useMemo<SidebarNavGroup[]>(() => {
-    const buckets = new Map<EnterpriseNavSection, SidebarNavGroup["items"]>();
-    for (const section of ENTERPRISE_SECTION_ORDER) {
-      buckets.set(section, []);
+    const mainCategoryItems = allowedModules.map((moduleDef) => ({
+      id: `module-${moduleDef.id}`,
+      label: moduleDef.name,
+      href: defaultRouteForModule(moduleDef.id),
+      active: moduleDef.id === activeModuleId,
+      testId: `module-main-${moduleDef.id.replace(/_/g, "-")}`,
+    }));
+
+    if (allowedModuleSet.has("administration")) {
+      mainCategoryItems.push({
+        id: "module-sharepoint",
+        label: "SharePoint",
+        href: "/sharepoint",
+        active: isSharePointCategoryActive,
+        testId: "module-main-sharepoint",
+      });
     }
 
-    const seenLinks = new Set<string>();
-    for (const moduleDef of listModules()) {
-      if (!allowedModuleSet.has(moduleDef.id)) {
-        continue;
-      }
-      const visibleItems = visibleModuleNavItems(moduleDef.id, grantedPermissions);
-      for (const item of visibleItems) {
-        if (seenLinks.has(item.href)) {
-          continue;
-        }
-        seenLinks.add(item.href);
-
-        const section = sectionForNavItem(item.href, item.label);
+    const subcategoryItems = isSharePointCategoryActive
+      ? [
+        {
+          id: "sharepoint-organization-information",
+          label: "Organization Information",
+          href: "/sharepoint",
+          active: pathname === "/sharepoint"
+            || pathname?.startsWith("/sharepoint/")
+            || pathname === "/organization/home"
+            || pathname?.startsWith("/organization/home/"),
+          testId: "module-nav-organization-information",
+        },
+      ]
+      : activeModuleId
+        ? visibleModuleNavItems(activeModuleId, grantedPermissions).map((item) => {
         const isInternal = item.href.startsWith("/");
         const isActive = isInternal && (pathname === item.href || pathname?.startsWith(`${item.href}/`));
-
-        buckets.get(section)?.push({
-          id: `${moduleDef.id}-${item.href}`,
+        return {
+          id: `${activeModuleId}-${item.href}`,
           label: item.label,
           href: item.href,
           external: item.external,
           active: isActive,
           description: item.external ? "Opens in a new tab" : undefined,
           testId: `module-nav-${item.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-        });
-      }
-    }
+        };
+      })
+        : [];
 
-    return ENTERPRISE_SECTION_ORDER.map((section) => ({
-      id: section.toLowerCase(),
-      label: section,
-      items: buckets.get(section) ?? [],
-    })).filter((group) => group.items.length > 0);
-  }, [allowedModuleSet, grantedPermissions, pathname]);
+    const groups: SidebarNavGroup[] = [];
+    if (mainCategoryItems.length > 0) {
+      groups.push({
+        id: "main-categories",
+        label: "Main categories",
+        items: mainCategoryItems,
+      });
+    }
+    if (subcategoryItems.length > 0) {
+      groups.push({
+        id: "subcategories",
+        label: "Subcategories",
+        items: subcategoryItems,
+      });
+    }
+    return groups;
+  }, [activeModuleId, allowedModuleSet, allowedModules, grantedPermissions, isSharePointCategoryActive, pathname]);
 
   const showSidebarByDefault = !isDirectory && !!activeModule;
   const showSidebar = typeof layoutConfig.showSidebar === "boolean"
@@ -240,7 +221,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const isSidebarCollapsed = !isMobile && Boolean(preferences?.sidebar_collapsed);
 
   const topModuleLabel = layoutConfig.moduleLabel
-    ?? (isDirectory ? "Home" : activeModule?.name ?? "Workspace");
+    ?? (isDirectory ? "Home" : isSharePointCategoryActive ? "SharePoint" : activeModule?.name ?? "Workspace");
 
   const topTitle = layoutConfig.pageTitle
     ?? (isDirectory

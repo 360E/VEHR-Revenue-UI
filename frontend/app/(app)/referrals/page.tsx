@@ -1,6 +1,7 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { BRANDING } from "@/lib/branding";
 
 const funnel = [
   { label: "New prospects", count: 18 },
@@ -19,7 +20,7 @@ export default function ReferralsPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="space-y-3">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-400">Encompass 360</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-slate-400">{BRANDING.name}</p>
         <h1 className="text-[2rem] font-semibold tracking-tight text-slate-900">Referrals / Prospects</h1>
         <p className="text-sm text-slate-500">Pipeline visibility for outreach, intake, and conversion.</p>
       </div>

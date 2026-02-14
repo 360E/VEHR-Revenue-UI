@@ -1,9 +1,11 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
 import { ApiError, apiFetch } from "@/lib/api";
+import { IntegrationStatusCard } from "@/components/enterprise/integration-status-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -62,6 +64,10 @@ type RingCentralConnect = {
   auth_url?: string;
 };
 
+type MicrosoftConnect = {
+  authorization_url: string;
+};
+
 type RingCentralEnsureSubscription = {
   status: string;
   rc_subscription_id?: string | null;
@@ -96,6 +102,8 @@ export default function AdminCenterPage() {
   const [ringCentralStatus, setRingCentralStatus] = useState<RingCentralStatus | null>(null);
   const [ringCentralMessage, setRingCentralMessage] = useState<string | null>(null);
   const [isConnectingRingCentral, setIsConnectingRingCentral] = useState(false);
+  const [isConnectingMicrosoft, setIsConnectingMicrosoft] = useState(false);
+  const [microsoftMessage, setMicrosoftMessage] = useState<string | null>(null);
   const [isEnsuringRingCentralSubscription, setIsEnsuringRingCentralSubscription] = useState(false);
   const [isDisconnectingRingCentral, setIsDisconnectingRingCentral] = useState(false);
 
@@ -118,6 +126,13 @@ export default function AdminCenterPage() {
     () => roles.find((role) => role.key === selectedRoleKey) ?? null,
     [roles, selectedRoleKey],
   );
+
+  const microsoftConnected = useMemo(() => {
+    const microsoftRow = integrationStatus?.items.find((item) =>
+      item.provider.toLowerCase().includes("microsoft")
+      || item.provider.toLowerCase().includes("sharepoint"));
+    return (microsoftRow?.connected_accounts ?? 0) > 0;
+  }, [integrationStatus?.items]);
 
   async function loadAdminData() {
     setIsLoading(true);
@@ -159,19 +174,17 @@ export default function AdminCenterPage() {
 
   useEffect(() => {
     const connected = searchParams.get("connected");
-    const err = searchParams.get("err");
     const ringCentralState = searchParams.get("ringcentral");
-    const reason = searchParams.get("reason");
     if (connected === "1" || ringCentralState === "connected") {
       setRingCentralMessage("RingCentral connected.");
       return;
     }
     if (connected === "0") {
-      setRingCentralMessage(err ? `RingCentral error: ${err}` : "RingCentral connection failed.");
+      setRingCentralMessage("RingCentral connection could not be completed.");
       return;
     }
     if (ringCentralState === "error") {
-      setRingCentralMessage(reason ? `RingCentral error: ${reason}` : "RingCentral connection failed.");
+      setRingCentralMessage("RingCentral connection could not be completed.");
     }
   }, [searchParams]);
 
@@ -286,6 +299,23 @@ export default function AdminCenterPage() {
     }
   }
 
+  async function handleConnectMicrosoft() {
+    setMicrosoftMessage(null);
+    setIsConnectingMicrosoft(true);
+    try {
+      const response = await apiFetch<MicrosoftConnect>("/api/v1/integrations/microsoft/connect", {
+        method: "POST",
+      });
+      if (!response.authorization_url) {
+        throw new Error("Missing authorization URL");
+      }
+      window.location.assign(response.authorization_url);
+    } catch {
+      setMicrosoftMessage("Unable to start Microsoft connection.");
+      setIsConnectingMicrosoft(false);
+    }
+  }
+
   async function handleConnectRingCentral() {
     setRingCentralMessage(null);
     setIsConnectingRingCentral(true);
@@ -298,8 +328,8 @@ export default function AdminCenterPage() {
         throw new Error("Missing authorization URL");
       }
       window.location.assign(redirectTarget);
-    } catch (error) {
-      setRingCentralMessage(toMessage(error, "Unable to start RingCentral connection."));
+    } catch {
+      setRingCentralMessage("Unable to start RingCentral connection.");
       setIsConnectingRingCentral(false);
     }
   }
@@ -312,10 +342,10 @@ export default function AdminCenterPage() {
         "/api/v1/integrations/ringcentral/ensure-subscription",
         { method: "POST" },
       );
-      setRingCentralMessage(`RingCentral subscription status: ${response.status}.`);
+      setRingCentralMessage(`RingCentral connection ${response.status.toLowerCase()}.`);
       await loadAdminData();
-    } catch (error) {
-      setRingCentralMessage(toMessage(error, "Unable to ensure RingCentral subscription."));
+    } catch {
+      setRingCentralMessage("Unable to refresh RingCentral connection.");
     } finally {
       setIsEnsuringRingCentralSubscription(false);
     }
@@ -328,8 +358,8 @@ export default function AdminCenterPage() {
       await apiFetch("/api/v1/integrations/ringcentral/disconnect", { method: "POST" });
       setRingCentralMessage("RingCentral disconnected.");
       await loadAdminData();
-    } catch (error) {
-      setRingCentralMessage(toMessage(error, "Unable to disconnect RingCentral."));
+    } catch {
+      setRingCentralMessage("Unable to disconnect RingCentral.");
     } finally {
       setIsDisconnectingRingCentral(false);
     }
@@ -383,76 +413,44 @@ export default function AdminCenterPage() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-xl text-slate-900">Integrations status</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-3 pt-0">
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">RingCentral</p>
-                      <p className="text-xs text-slate-500">
-                        {ringCentralStatus?.connected ? "Connected" : "Not connected"}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        type="button"
-                        className="h-8 rounded-lg px-3"
-                        onClick={() => void handleConnectRingCentral()}
-                        disabled={isConnectingRingCentral}
-                      >
-                        {isConnectingRingCentral ? "Redirecting..." : "Connect RingCentral"}
-                      </Button>
-                      {ringCentralStatus?.connected ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="h-8 rounded-lg px-3"
-                          onClick={() => void handleDisconnectRingCentral()}
-                          disabled={isDisconnectingRingCentral}
-                        >
-                          {isDisconnectingRingCentral ? "Disconnecting..." : "Disconnect"}
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                  {ringCentralStatus?.connected ? (
-                    <p className="mt-2 text-xs text-slate-500">
-                      Account: {ringCentralStatus.account_id || "n/a"} - Extension:{" "}
-                      {ringCentralStatus.extension_id || "n/a"}
-                    </p>
-                  ) : null}
-                  <p className="mt-1 text-xs text-slate-500">
-                    Subscription: {ringCentralStatus?.subscription_status || "MISSING"}
-                  </p>
-                  {ringCentralStatus?.subscription_expires_at ? (
-                    <p className="mt-1 text-xs text-slate-500">
-                      Subscription expires: {new Date(ringCentralStatus.subscription_expires_at).toLocaleString()}
-                    </p>
-                  ) : null}
-                  <div className="mt-2">
+              <CardContent className="space-y-4 pt-0">
+                <IntegrationStatusCard
+                  title="RingCentral"
+                  provider="ringcentral"
+                  connected={Boolean(ringCentralStatus?.connected)}
+                  onConnect={() => void handleConnectRingCentral()}
+                  isConnecting={isConnectingRingCentral}
+                  connectLabel="Connect RingCentral"
+                  onDisconnect={() => void handleDisconnectRingCentral()}
+                  isDisconnecting={isDisconnectingRingCentral}
+                  secondaryAction={(
                     <Button
                       type="button"
                       variant="outline"
-                      className="h-8 rounded-lg px-3"
+                      size="sm"
                       onClick={() => void handleEnsureRingCentralSubscription()}
                       disabled={isEnsuringRingCentralSubscription || !ringCentralStatus?.connected}
                     >
-                      {isEnsuringRingCentralSubscription ? "Checking..." : "Ensure subscription"}
+                      {isEnsuringRingCentralSubscription ? "Refreshing..." : "Refresh connection"}
                     </Button>
-                  </div>
-                </div>
-                {integrationStatus?.items.length ? (
-                  integrationStatus.items.map((item) => (
-                    <div key={item.provider} className="rounded-lg bg-slate-50 px-3 py-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold text-slate-900">{item.provider}</span>
-                        <span className="text-xs text-slate-600">{item.connected_accounts} connected</span>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-sm text-slate-500">No active integrations connected.</p>
-                )}
-                {ringCentralMessage ? <p className="text-sm text-slate-700">{ringCentralMessage}</p> : null}
+                  )}
+                  message={ringCentralMessage}
+                />
+
+                <IntegrationStatusCard
+                  title="Microsoft SharePoint"
+                  provider="sharepoint"
+                  connected={microsoftConnected}
+                  onConnect={() => void handleConnectMicrosoft()}
+                  isConnecting={isConnectingMicrosoft}
+                  connectLabel="Connect Microsoft"
+                  secondaryAction={(
+                    <Button type="button" variant="outline" size="sm" asChild>
+                      <Link href="/admin/integrations/microsoft">Open</Link>
+                    </Button>
+                  )}
+                  message={microsoftMessage}
+                />
               </CardContent>
             </Card>
           </div>

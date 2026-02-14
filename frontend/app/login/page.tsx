@@ -3,8 +3,10 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { BrandLogo } from "@/components/brand/brand-logo";
 import { ApiError, apiFetch } from "@/lib/api";
 import { persistAccessToken } from "@/lib/auth";
+import { BRANDING } from "@/lib/branding";
 
 type TokenResponse = {
   access_token: string;
@@ -112,11 +114,11 @@ export default function LoginPage() {
       <div className="relative z-10 w-full max-w-md">
         <div className="rounded-2xl border border-slate-200 bg-white/95 px-7 py-8 shadow-[0_20px_40px_-20px_rgba(15,23,42,0.35)] backdrop-blur">
           <div className="mb-6 text-center">
-            <div className="mx-auto mb-3 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-slate-900 text-sm font-bold tracking-[0.18em] text-white">
-              E360
+            <div className="mx-auto mb-3 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-slate-900/4">
+              <BrandLogo size={40} />
             </div>
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Encompass 360</h1>
-            <p className="mt-1 text-sm text-slate-600">For clinicians. By clinicians.</p>
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{BRANDING.name}</h1>
+            <p className="mt-1 text-sm text-slate-600">{BRANDING.tagline}</p>
           </div>
 
           <form className="space-y-4" onSubmit={handleSubmit}>
