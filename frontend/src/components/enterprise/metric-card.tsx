@@ -16,11 +16,11 @@ type MetricCardProps = {
 };
 
 const toneClass: Record<MetricTone, string> = {
-  neutral: "border-[var(--neutral-border)]",
-  info: "border-[color-mix(in_srgb,var(--status-informational)_45%,white)]",
-  success: "border-[color-mix(in_srgb,var(--status-stable)_45%,white)]",
-  warn: "border-[color-mix(in_srgb,var(--status-attention)_45%,white)]",
-  danger: "border-[color-mix(in_srgb,var(--status-critical)_45%,white)]",
+  neutral: "border-[color-mix(in_srgb,var(--neutral-border)_72%,white)]",
+  info: "border-[color-mix(in_srgb,var(--status-informational)_35%,white)]",
+  success: "border-[color-mix(in_srgb,var(--status-stable)_35%,white)]",
+  warn: "border-[color-mix(in_srgb,var(--status-attention)_35%,white)]",
+  danger: "border-[color-mix(in_srgb,var(--status-critical)_35%,white)]",
 };
 
 export function MetricCard({
@@ -35,17 +35,17 @@ export function MetricCard({
   return (
     <Card
       className={cn(
-        "bg-[var(--neutral-panel)] shadow-sm transition-shadow duration-150 hover:shadow-md",
+        "bg-[var(--neutral-panel)]",
         toneClass[tone],
         className,
       )}
       data-testid={testId}
     >
-      <CardHeader className="flex flex-row items-center justify-between pb-[var(--space-8)]">
-        <p className="ui-type-card-label uppercase tracking-[0.14em] text-[var(--neutral-muted)]">{label}</p>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <p className="ui-type-card-label text-[var(--neutral-muted)]">{label}</p>
         {icon ? <span className="text-[var(--neutral-muted)]">{icon}</span> : null}
       </CardHeader>
-      <CardContent className="pt-[var(--space-4)]">
+      <CardContent className="pt-0">
         <p className="text-2xl font-semibold tracking-tight text-[var(--neutral-text)]">{value}</p>
         {hint ? <p className="ui-type-meta mt-[var(--space-4)]">{hint}</p> : null}
       </CardContent>

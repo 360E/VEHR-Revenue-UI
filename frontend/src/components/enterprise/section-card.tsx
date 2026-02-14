@@ -23,8 +23,8 @@ export function SectionCard({
   testId,
 }: SectionCardProps) {
   return (
-    <Card className={cn("bg-[var(--neutral-panel)] shadow-sm hover:shadow-md", className)} data-testid={testId}>
-      <CardHeader className="border-b border-[var(--neutral-border)] pb-[var(--space-12)]">
+    <Card className={cn("bg-[var(--neutral-panel)]", className)} data-testid={testId}>
+      <CardHeader className="border-b border-[color-mix(in_srgb,var(--neutral-border)_70%,white)]">
         <div className="flex flex-wrap items-center justify-between gap-[var(--space-8)]">
           <CardTitle className="ui-type-section-title text-[var(--neutral-text)]">{title}</CardTitle>
           {actions ? <div className="flex flex-wrap items-center gap-[var(--space-8)]">{actions}</div> : null}
@@ -33,7 +33,7 @@ export function SectionCard({
           <p className="ui-type-body text-[var(--neutral-muted)]">{description}</p>
         ) : null}
       </CardHeader>
-      <CardContent className={cn("pt-[var(--space-16)]", contentClassName)}>{children}</CardContent>
+      <CardContent className={cn("pt-[var(--layout-card-padding)]", contentClassName)}>{children}</CardContent>
     </Card>
   );
 }

@@ -22,7 +22,7 @@ const TableHeader = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <thead
     ref={ref}
-    className={cn("[&_tr]:border-b [&_tr]:border-[var(--neutral-border)]", className)}
+    className={cn("[&_tr]:border-b [&_tr]:border-[color-mix(in_srgb,var(--neutral-border)_70%,white)]", className)}
     {...props}
   />
 ))
@@ -47,7 +47,7 @@ const TableFooter = React.forwardRef<
   <tfoot
     ref={ref}
     className={cn(
-      "border-t border-[var(--neutral-border)] bg-muted/50 font-medium [&>tr]:last:border-b-0",
+      "border-t border-[color-mix(in_srgb,var(--neutral-border)_70%,white)] bg-muted/35 font-medium [&>tr]:last:border-b-0",
       className
     )}
     {...props}
@@ -62,7 +62,7 @@ const TableRow = React.forwardRef<
   <tr
     ref={ref}
     className={cn(
-      "border-b border-[var(--neutral-border)] transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted",
+      "border-b border-[color-mix(in_srgb,var(--neutral-border)_70%,white)] transition-colors duration-150 hover:bg-muted/35 data-[state=selected]:bg-muted",
       className
     )}
     {...props}
@@ -77,7 +77,7 @@ const TableHead = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      "h-[var(--space-32)] px-[var(--space-8)] text-left align-middle font-medium text-[var(--neutral-muted)] [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+      "h-[var(--space-32)] px-[var(--space-8)] text-left align-middle text-[length:var(--font-size-12)] font-medium text-[var(--neutral-muted)] [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
       className
     )}
     {...props}

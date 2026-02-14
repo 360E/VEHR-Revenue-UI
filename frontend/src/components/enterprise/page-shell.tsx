@@ -29,10 +29,10 @@ export function PageShell({
 }: PageShellProps) {
   return (
     <div className={cn("flex flex-col gap-[var(--layout-section-gap)]", className)} data-testid={testId}>
-      <header className="flex flex-wrap items-start justify-between gap-[var(--space-16)]">
-        <div className="min-w-0 space-y-[var(--space-8)]">
+      <header className="flex flex-wrap items-start justify-between gap-[var(--layout-section-gap)]">
+        <div className="min-w-0 space-y-[var(--space-12)]">
           {eyebrow ? (
-            <p className="ui-type-meta font-semibold uppercase tracking-[0.14em]">{eyebrow}</p>
+            <p className="ui-type-meta font-medium">{eyebrow}</p>
           ) : null}
           <h1 className="ui-type-page-title text-[var(--neutral-text)]">{title}</h1>
           {description ? (

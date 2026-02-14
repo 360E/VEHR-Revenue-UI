@@ -4,7 +4,7 @@
   --neutral-panel: #ffffff;
   --neutral-text: #0f1b2d;
   --neutral-muted: #54637a;
-  --neutral-border: #d7e0eb;
+  --neutral-border: #dfe7f1;
 
   /* Semantic colors */
   --success: #067647;
@@ -70,9 +70,9 @@
   --type-card-label-weight: var(--font-weight-semibold);
 
   /* Shadow scale (kept conservative for clinical UIs) */
-  --shadow-sm: 0 1px 2px rgba(15, 27, 45, 0.08);
-  --shadow-md: 0 3px 8px rgba(15, 27, 45, 0.12);
-  --shadow-lg: 0 8px 20px rgba(15, 27, 45, 0.14);
+  --shadow-sm: 0 1px 2px rgba(15, 27, 45, 0.06), 0 1px 1px rgba(15, 27, 45, 0.03);
+  --shadow-md: 0 6px 14px rgba(15, 27, 45, 0.1);
+  --shadow-lg: 0 12px 28px rgba(15, 27, 45, 0.14);
 
   /* Backward-compatible shadow aliases */
   --shadow-1: var(--shadow-sm);
@@ -153,7 +153,7 @@
   --neutral-panel: #122036;
   --neutral-text: #edf3fb;
   --neutral-muted: #a9bad3;
-  --neutral-border: #2a3b54;
+  --neutral-border: #31455f;
 
   --success: #32d583;
   --warning: #fdb022;

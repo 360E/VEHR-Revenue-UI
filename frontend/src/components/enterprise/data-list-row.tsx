@@ -17,7 +17,7 @@ type DataListRowProps = {
 };
 
 const toneClass: Record<StatusTone, string> = {
-  neutral: "border-[var(--neutral-border)] bg-[var(--neutral-panel)] text-[var(--neutral-muted)]",
+  neutral: "border-[color-mix(in_srgb,var(--neutral-border)_72%,white)] bg-[var(--neutral-panel)] text-[var(--neutral-muted)]",
   informational: "ui-status-info",
   stable: "ui-status-success",
   attention: "ui-status-warning",
@@ -48,9 +48,9 @@ export function DataListRow({
       type={onClick ? "button" : undefined}
       onClick={onClick}
       className={cn(
-        "w-full rounded-[var(--radius-6)] border border-[var(--neutral-border)] bg-[var(--neutral-panel)] px-[var(--space-12)] py-[var(--space-12)] text-left",
+        "w-full rounded-[var(--radius-6)] border border-[color-mix(in_srgb,var(--neutral-border)_72%,white)] bg-[var(--neutral-panel)] px-[var(--space-12)] py-[var(--space-12)] text-left shadow-sm",
         onClick
-          ? "transition-colors duration-150 hover:bg-[var(--muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+          ? "transition-[background-color,border-color,box-shadow] duration-150 hover:bg-[var(--muted)] hover:shadow-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1"
           : "",
         className,
       )}
@@ -83,4 +83,3 @@ export function DataListRow({
     </Container>
   );
 }
-

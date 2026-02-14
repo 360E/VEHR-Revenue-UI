@@ -3,32 +3,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { ModuleTileCard } from "@/components/enterprise/module-tile-card";
+import { PageShell } from "@/components/enterprise/page-shell";
+import { SectionCard } from "@/components/enterprise/section-card";
+import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
-import { AppLayoutPageConfig } from "@/lib/app-layout-config";
+import { AppLayoutPageConfig, useAppLayoutConfig } from "@/lib/app-layout-config";
 import { ModuleId, defaultRouteForModule, getModuleById, isModuleId } from "@/lib/modules";
 import { fetchMePreferences, patchMePreferences } from "@/lib/preferences";
 
-const TILE_STYLES: Record<ModuleId, string> = {
-  care_delivery: "from-cyan-500/20 to-cyan-200/10 border-cyan-200",
-  call_center: "from-emerald-500/20 to-emerald-200/10 border-emerald-200",
-  workforce: "from-amber-500/20 to-amber-200/10 border-amber-200",
-  revenue_cycle: "from-slate-500/20 to-slate-200/10 border-slate-300",
-  governance: "from-rose-500/20 to-rose-200/10 border-rose-200",
-  administration: "from-indigo-500/20 to-indigo-200/10 border-indigo-200",
-};
-
-const TILE_ICONS: Record<ModuleId, string> = {
-  care_delivery: "CD",
-  call_center: "CC",
-  workforce: "WM",
-  revenue_cycle: "RC",
-  governance: "GV",
-  administration: "AD",
-};
-
 export default function DirectoryPage() {
+  const { searchQuery } = useAppLayoutConfig();
   const router = useRouter();
   const [allowedModules, setAllowedModules] = useState<ModuleId[]>([]);
+  const [lastActiveModule, setLastActiveModule] = useState<ModuleId | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [launchingModule, setLaunchingModule] = useState<ModuleId | null>(null);
@@ -44,6 +32,7 @@ export default function DirectoryPage() {
         if (!isMounted) return;
         const normalized = preferences.allowed_modules.filter((id): id is ModuleId => isModuleId(id));
         setAllowedModules(normalized);
+        setLastActiveModule(isModuleId(preferences.last_active_module) ? preferences.last_active_module : null);
       } catch (loadError) {
         if (!isMounted) return;
         if (loadError instanceof ApiError || loadError instanceof Error) {
@@ -68,6 +57,30 @@ export default function DirectoryPage() {
     return allowedModules.map((moduleId) => getModuleById(moduleId));
   }, [allowedModules]);
 
+  const filteredTiles = useMemo(() => {
+    const normalized = searchQuery.trim().toLowerCase();
+    if (!normalized) return visibleTiles;
+    return visibleTiles.filter((tile) =>
+      `${tile.name} ${tile.description}`.toLowerCase().includes(normalized),
+    );
+  }, [searchQuery, visibleTiles]);
+
+  const recentModuleIds = useMemo(() => {
+    const modules: ModuleId[] = [];
+    if (lastActiveModule && allowedModules.includes(lastActiveModule)) {
+      modules.push(lastActiveModule);
+    }
+    for (const moduleId of allowedModules) {
+      if (!modules.includes(moduleId)) {
+        modules.push(moduleId);
+      }
+      if (modules.length >= 3) {
+        break;
+      }
+    }
+    return modules;
+  }, [allowedModules, lastActiveModule]);
+
   async function enterModule(moduleId: ModuleId) {
     try {
       setLaunchingModule(moduleId);
@@ -85,60 +98,88 @@ export default function DirectoryPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+    <div className="flex flex-col gap-[var(--space-24)]" data-testid="directory-launcher">
       <AppLayoutPageConfig
+        moduleLabel="Home"
         pageTitle="Organizational Directory"
-        subtitle="Select a system zone to launch a focused module workspace."
+        subtitle="Choose a module workspace and continue team operations."
         showSearch={true}
         searchPlaceholder="Search modules"
         showSidebar={false}
       />
 
-      <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white px-6 py-6 shadow-sm">
-        <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Organizational Directory</h1>
-        <p className="mt-2 text-sm text-slate-600">Select a system zone to launch a focused module workspace.</p>
-      </div>
+      <PageShell
+        eyebrow="Launcher"
+        title="Module Workspace Launcher"
+        description="Select a module to open your operational workspace."
+        testId="directory-page-shell"
+      >
+        {error ? (
+          <div className="rounded-[var(--radius-6)] border border-[color-mix(in_srgb,var(--status-critical)_25%,white)] bg-[color-mix(in_srgb,var(--status-critical)_8%,white)] px-[var(--space-12)] py-[var(--space-8)] text-[length:var(--font-size-14)] text-[var(--status-critical)]">
+            {error}
+          </div>
+        ) : null}
 
-      {error ? (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
-      ) : null}
+        <SectionCard
+          title="Recently used"
+          description="Quickly jump back into recent module workspaces."
+          testId="directory-recently-used"
+        >
+          {recentModuleIds.length === 0 ? (
+            <p className="ui-type-body text-[var(--neutral-muted)]">
+              No recent modules yet. Open any module to populate this row.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-[var(--space-8)]">
+              {recentModuleIds.map((moduleId) => {
+                const moduleDef = getModuleById(moduleId);
+                return (
+                  <Button
+                    key={`recent-${moduleDef.id}`}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => enterModule(moduleDef.id)}
+                    disabled={launchingModule === moduleDef.id}
+                  >
+                    {launchingModule === moduleDef.id ? `Opening ${moduleDef.name}...` : moduleDef.name}
+                  </Button>
+                );
+              })}
+            </div>
+          )}
+        </SectionCard>
 
-      {loading ? (
-        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">Loading modules...</div>
-      ) : null}
+        {loading ? (
+          <div className="ui-panel px-[var(--space-16)] py-[var(--space-12)] ui-type-body text-[var(--neutral-muted)]">
+            Loading modules...
+          </div>
+        ) : null}
 
-      {!loading && visibleTiles.length === 0 ? (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          No modules are currently available for your role in this organization.
-        </div>
-      ) : null}
+        {!loading && filteredTiles.length === 0 ? (
+          <div className="ui-panel px-[var(--space-16)] py-[var(--space-12)] ui-type-body text-[var(--neutral-muted)]">
+            {visibleTiles.length === 0
+              ? "No modules are currently available for your role in this organization."
+              : "No modules match the current search."}
+          </div>
+        ) : null}
 
-      {!loading && visibleTiles.length > 0 ? (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {visibleTiles.map((tile) => (
-            <button
-              key={tile.id}
-              type="button"
-              onClick={() => enterModule(tile.id)}
-              className={`group relative overflow-hidden rounded-2xl border bg-gradient-to-br p-6 text-left shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-lg ${TILE_STYLES[tile.id]}`}
-            >
-              <div className="absolute inset-0 bg-white/45 transition-opacity duration-200 group-hover:opacity-25" />
-              <div className="relative z-10 flex items-start gap-4">
-                <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-white/70 bg-white/70 text-sm font-bold tracking-[0.2em] text-slate-800">
-                  {TILE_ICONS[tile.id]}
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-xl font-semibold tracking-tight text-slate-900">{tile.name}</span>
-                  <span className="mt-1 block text-sm text-slate-700">{tile.description}</span>
-                </span>
-              </div>
-              <div className="relative z-10 mt-6 text-xs font-semibold uppercase tracking-[0.16em] text-slate-700">
-                {launchingModule === tile.id ? "Launching..." : "Enter Module"}
-              </div>
-            </button>
-          ))}
-        </div>
-      ) : null}
+        {!loading && filteredTiles.length > 0 ? (
+          <div className="grid grid-cols-1 gap-[var(--space-16)] md:grid-cols-2 xl:grid-cols-3" data-testid="directory-module-grid">
+            {filteredTiles.map((tile) => (
+              <ModuleTileCard
+                key={tile.id}
+                moduleId={tile.id}
+                title={tile.name}
+                description={tile.description}
+                onOpen={() => enterModule(tile.id)}
+                isOpening={launchingModule === tile.id}
+                testId={`directory-module-${tile.id}`}
+              />
+            ))}
+          </div>
+        ) : null}
+      </PageShell>
     </div>
   );
 }

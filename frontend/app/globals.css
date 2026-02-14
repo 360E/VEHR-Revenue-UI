@@ -107,6 +107,7 @@ body {
 .ui-type-meta {
   font-size: var(--type-meta-size);
   line-height: var(--type-meta-line-height);
+  font-weight: var(--font-weight-medium);
   color: var(--neutral-muted);
 }
 
@@ -114,6 +115,7 @@ body {
   font-size: var(--type-card-label-size);
   line-height: var(--type-card-label-line-height);
   font-weight: var(--type-card-label-weight);
+  color: var(--neutral-muted);
 }
 
 .type-pageTitle {
@@ -206,10 +208,11 @@ body {
 }
 
 .ui-panel {
-  border: 1px solid var(--neutral-border);
+  border: 1px solid color-mix(in srgb, var(--neutral-border) 72%, white);
   border-radius: var(--radius-card);
   background: var(--neutral-panel);
   box-shadow: var(--shadow-sm);
+  transition: box-shadow 150ms ease, border-color 150ms ease, background-color 150ms ease;
 }
 
 .ui-badge {

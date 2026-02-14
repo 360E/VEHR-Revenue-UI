@@ -3,10 +3,12 @@
 import { ReactNode, createContext, useContext, useEffect } from "react";
 
 export type AppLayoutConfig = {
+  moduleLabel?: string;
   pageTitle?: string;
   subtitle?: string;
   showSearch?: boolean;
   searchPlaceholder?: string;
+  notificationCount?: number;
   actions?: ReactNode;
   showSidebar?: boolean;
 };
@@ -31,10 +33,12 @@ export function useAppLayoutConfig() {
 type AppLayoutPageConfigProps = AppLayoutConfig;
 
 export function AppLayoutPageConfig({
+  moduleLabel,
   pageTitle,
   subtitle,
   showSearch,
   searchPlaceholder,
+  notificationCount,
   actions,
   showSidebar,
 }: AppLayoutPageConfigProps) {
@@ -42,10 +46,12 @@ export function AppLayoutPageConfig({
 
   useEffect(() => {
     setLayoutConfig({
+      moduleLabel,
       pageTitle,
       subtitle,
       showSearch,
       searchPlaceholder,
+      notificationCount,
       actions,
       showSidebar,
     });
@@ -53,6 +59,8 @@ export function AppLayoutPageConfig({
       resetLayoutConfig();
     };
   }, [
+    moduleLabel,
+    notificationCount,
     actions,
     pageTitle,
     resetLayoutConfig,

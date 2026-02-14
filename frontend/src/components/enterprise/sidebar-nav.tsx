@@ -66,7 +66,7 @@ function iconClasses(item: SidebarNavItem): string {
 
 function itemClasses(item: SidebarNavItem, collapsed: boolean): string {
   const base =
-    "group relative flex min-h-[44px] w-full items-center justify-between gap-[var(--space-8)] rounded-[var(--radius-8)] border border-transparent px-[var(--space-8)] py-[var(--space-8)] text-left transition-colors duration-150";
+    "group relative flex min-h-[44px] w-full items-center justify-between gap-[var(--space-8)] rounded-[var(--radius-8)] border border-transparent px-[var(--space-8)] py-[var(--space-8)] text-left transition-[background-color,border-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1";
   const collapseClasses = collapsed ? "justify-center px-[var(--space-4)]" : "";
 
   if (item.disabled) {
@@ -88,7 +88,7 @@ function itemClasses(item: SidebarNavItem, collapsed: boolean): string {
   return cn(
     base,
     collapseClasses,
-    "text-[var(--neutral-text)] hover:bg-[var(--muted)]",
+    "text-[var(--neutral-text)] hover:bg-[var(--muted)] hover:shadow-md",
   );
 }
 

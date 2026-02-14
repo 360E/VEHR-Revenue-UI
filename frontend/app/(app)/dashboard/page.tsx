@@ -2,18 +2,16 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Bell, Brain, CircleDollarSign, Search } from "lucide-react";
+import { CircleDollarSign } from "lucide-react";
 
 import MetricCard from "../_components/MetricCard";
 import { DataListRow } from "@/components/enterprise/data-list-row";
 import { SectionCard } from "@/components/enterprise/section-card";
 import { SidebarNav, type SidebarNavGroup } from "@/components/enterprise/sidebar-nav";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { ApiError, apiFetch } from "@/lib/api";
-import { BRANDING } from "@/lib/branding";
+import { AppLayoutPageConfig, useAppLayoutConfig } from "@/lib/app-layout-config";
 import {
   createTask,
   listTasks,
@@ -115,15 +113,6 @@ function toIsoOrNull(localDateTime: string): string | null {
     return null;
   }
   return parsed.toISOString();
-}
-
-function roleLabel(role?: string | null): string {
-  if (!role) return "Staff";
-  return role
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
-    .join(" ");
 }
 
 function fullNameForClient(client: ClientRecord): string {
@@ -232,7 +221,7 @@ async function safeAuditFetch<T>(path: string): Promise<T | null> {
 }
 
 export default function DashboardPage() {
-  const [currentUser, setCurrentUser] = useState<MeResponse | null>(null);
+  const { searchQuery } = useAppLayoutConfig();
   const [clients, setClients] = useState<ClientRecord[]>([]);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [auditSummary, setAuditSummary] = useState<AuditSummaryResponse | null>(null);
@@ -241,7 +230,6 @@ export default function DashboardPage() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isSavingTask, setIsSavingTask] = useState(false);
@@ -282,7 +270,6 @@ export default function DashboardPage() {
 
         if (!isMounted) return;
 
-        setCurrentUser(me);
         setClients(clientRows);
         setTasks(taskList.items);
         setAuditSummary(summary);
@@ -303,15 +290,6 @@ export default function DashboardPage() {
       isMounted = false;
     };
   }, []);
-
-  const userDisplayName = useMemo(() => {
-    if (currentUser?.full_name?.trim()) {
-      return currentUser.full_name.trim();
-    }
-    return currentUser?.email ?? "Session User";
-  }, [currentUser]);
-
-  const userInitials = useMemo(() => initialsFromName(userDisplayName), [userDisplayName]);
 
   const claimsRejectedCount = useMemo(
     () =>
@@ -594,81 +572,28 @@ export default function DashboardPage() {
     }
   }
 
-  function openTannerAi() {
-    const trigger = document.querySelector<HTMLButtonElement>("[data-testid='copilot-trigger']");
-    if (trigger) {
-      trigger.click();
-    }
-  }
-
   return (
     <div className="flex flex-col gap-[var(--space-24)]" data-testid="operations-command-center">
-      <header className="ui-panel p-[var(--space-16)] sm:p-[var(--space-24)]">
-        <div className="flex flex-col gap-[var(--space-16)]">
-          <div className="flex flex-wrap items-start justify-between gap-[var(--space-16)]">
-            <div className="min-w-0">
-              <p className="ui-type-meta font-semibold uppercase tracking-[0.14em]">{BRANDING.name}</p>
-              <h1 className="ui-type-page-title mt-[var(--space-4)] text-[var(--neutral-text)]">Clinical Command Center</h1>
-              <p className="ui-type-body mt-[var(--space-8)] text-[var(--neutral-muted)]">
-                Operations dashboard for clinical risk, revenue integrity, and compliance oversight.
-              </p>
-            </div>
+      <AppLayoutPageConfig
+        moduleLabel="Operations"
+        pageTitle="Clinical Command Center"
+        subtitle="Operations dashboard for clinical risk, revenue integrity, and compliance oversight."
+        showSearch={true}
+        searchPlaceholder="Search clients, revenue, compliance"
+        notificationCount={notificationCount}
+        actions={(
+          <Button type="button" size="sm" onClick={() => setIsCreateOpen(true)}>
+            Create Task
+          </Button>
+        )}
+      />
 
-            <div className="flex w-full max-w-[640px] flex-wrap items-center justify-end gap-[var(--space-8)] lg:w-auto">
-              <div className="relative min-w-[220px] flex-1 lg:w-[320px] lg:flex-none">
-                <Search className="pointer-events-none absolute left-[var(--space-12)] top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--neutral-muted)]" />
-                <Input
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Global search (clients, revenue, compliance)"
-                  className="h-[var(--space-40)] pl-[36px]"
-                  aria-label="Global search"
-                />
-              </div>
-
-              <Button type="button" variant="outline" className="relative h-[var(--space-40)] px-[var(--space-12)]" aria-label="Notifications">
-                <Bell className="h-4 w-4" />
-                <span className="ml-[var(--space-4)]">Notifications</span>
-                {notificationCount > 0 ? (
-                  <span className="ml-[var(--space-4)] inline-flex min-w-[22px] justify-center rounded-[var(--radius-4)] bg-[var(--status-critical)] px-[var(--space-4)] py-[2px] text-[10px] font-semibold text-white">
-                    {notificationCount}
-                  </span>
-                ) : null}
-              </Button>
-
-              <Button type="button" variant="secondary" className="h-[var(--space-40)]" onClick={openTannerAi}>
-                <Brain className="h-4 w-4" />
-                Tanner AI
-              </Button>
-
-              <Button type="button" onClick={() => setIsCreateOpen(true)} className="h-[var(--space-40)]">
-                Create Task
-              </Button>
-
-              <div className="inline-flex items-center gap-[var(--space-8)] rounded-[var(--radius-8)] border border-[var(--neutral-border)] bg-[var(--neutral-panel)] px-[var(--space-8)] py-[var(--space-8)]">
-                <div className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-8)] bg-[var(--primary)] text-[length:var(--font-size-14)] font-semibold text-[var(--primary-foreground)]">
-                  {userInitials}
-                </div>
-                <div className="min-w-0">
-                  <p className="truncate text-[length:var(--font-size-14)] font-semibold text-[var(--neutral-text)]">
-                    {userDisplayName}
-                  </p>
-                  <Badge variant="outline" className="mt-[2px] text-[10px] uppercase tracking-[0.1em]">
-                    {roleLabel(currentUser?.role)}
-                  </Badge>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {isLoading ? <p className="ui-type-meta">Loading command center data...</p> : null}
-          {loadError ? (
-            <div className="rounded-[var(--radius-6)] border border-[color-mix(in_srgb,var(--status-critical)_25%,white)] bg-[color-mix(in_srgb,var(--status-critical)_8%,white)] px-[var(--space-12)] py-[var(--space-8)] text-[length:var(--font-size-14)] text-[var(--status-critical)]">
-              {loadError}
-            </div>
-          ) : null}
+      {isLoading ? <p className="ui-type-meta">Loading command center data...</p> : null}
+      {loadError ? (
+        <div className="rounded-[var(--radius-6)] border border-[color-mix(in_srgb,var(--status-critical)_25%,white)] bg-[color-mix(in_srgb,var(--status-critical)_8%,white)] px-[var(--space-12)] py-[var(--space-8)] text-[length:var(--font-size-14)] text-[var(--status-critical)]">
+          {loadError}
         </div>
-      </header>
+      ) : null}
 
       <div className="grid gap-[var(--space-16)] lg:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="space-y-[var(--space-16)]">

@@ -2,12 +2,13 @@
 
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { Bell, Brain } from "lucide-react";
 
 import CopilotDrawer from "../components/copilot-drawer";
 import { ModuleSidebar } from "@/components/app-shell/module-sidebar";
 import { TopBar } from "@/components/app-shell/top-bar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BRANDING } from "@/lib/branding";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -238,11 +239,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     : showSidebarByDefault;
   const isSidebarCollapsed = !isMobile && Boolean(preferences?.sidebar_collapsed);
 
+  const topModuleLabel = layoutConfig.moduleLabel
+    ?? (isDirectory ? "Home" : activeModule?.name ?? "Workspace");
+
   const topTitle = layoutConfig.pageTitle
     ?? (isDirectory
       ? "Organizational Directory"
       : activeModule
-        ? `${activeModule.name} / ${pageTitleForPath(pathname, activeModule.id)}`
+        ? pageTitleForPath(pathname, activeModule.id)
         : "Workspace");
 
   const subtitle = layoutConfig.subtitle
@@ -252,6 +256,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   const showSearch = layoutConfig.showSearch ?? false;
   const searchPlaceholder = layoutConfig.searchPlaceholder ?? "Search workspace";
+  const notificationCount = layoutConfig.notificationCount ?? 0;
 
   useEffect(() => {
     if (!preferences || !activeModuleId || isDirectory) {
@@ -329,6 +334,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     router.replace("/login");
   }
 
+  async function handleOpenTanner() {
+    if (!preferences?.copilot_enabled) {
+      await updatePreferences({ copilot_enabled: true });
+    }
+    const trigger = document.querySelector<HTMLButtonElement>("[data-testid='copilot-trigger']");
+    trigger?.click();
+  }
+
   if (isCheckingSession) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-6">
@@ -358,38 +371,58 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   const utilitySlot = (
     <>
-      <Button variant="outline" size="sm" asChild>
-        <Link href="/directory">Launcher</Link>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="relative"
+        aria-label="Notifications"
+        onClick={() => router.push("/activity-log")}
+      >
+        <Bell className="h-4 w-4" />
+        <span className="sr-only">Notifications</span>
+        {notificationCount > 0 ? (
+          <span className="absolute -right-1 -top-1 inline-flex min-w-[18px] justify-center rounded-[var(--radius-4)] bg-[var(--status-critical)] px-1 text-[10px] font-semibold text-white">
+            {notificationCount > 99 ? "99+" : notificationCount}
+          </span>
+        ) : null}
       </Button>
 
       <Button
         type="button"
-        variant={preferences.copilot_enabled ? "secondary" : "outline"}
+        variant="secondary"
         size="sm"
-        onClick={() => updatePreferences({ copilot_enabled: !preferences.copilot_enabled })}
+        onClick={() => {
+          void handleOpenTanner();
+        }}
       >
-        Tanner {preferences.copilot_enabled ? "On" : "Off"}
+        <Brain className="h-4 w-4" />
+        Tanner AI
       </Button>
 
-      <div className="inline-flex items-center gap-[var(--space-8)] rounded-xl border border-[var(--neutral-border)] bg-[var(--neutral-panel)] px-[var(--space-8)] py-[var(--space-8)]">
+      <div className="inline-flex items-center gap-[var(--space-8)] rounded-xl border border-[var(--neutral-border)] bg-[var(--neutral-panel)] px-[var(--space-8)] py-[6px]">
         <span className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-6)] bg-[var(--primary)] text-[11px] font-semibold text-[var(--primary-foreground)]">
           {userInitials}
         </span>
-        <span className="hidden sm:block">
-          <span className="block text-xs font-semibold text-[var(--neutral-text)]">
+        <span className="hidden xl:block">
+          <span className="block text-xs font-semibold leading-tight text-[var(--neutral-text)]">
             {currentUser?.full_name || currentUser?.email || "Session User"}
           </span>
-          <span className="block text-[11px] text-[var(--neutral-muted)]">
+          <Badge variant="outline" className="mt-[2px] text-[10px]">
             {displayRoleLabel(currentUser?.role)}
-          </span>
+          </Badge>
         </span>
-        <button
+        <Button
           type="button"
-          onClick={handleSignOut}
-          className="rounded-[var(--radius-4)] px-[var(--space-8)] py-[var(--space-4)] text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--neutral-muted)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--neutral-text)]"
+          variant={preferences.copilot_enabled ? "secondary" : "outline"}
+          size="sm"
+          onClick={() => updatePreferences({ copilot_enabled: !preferences.copilot_enabled })}
         >
+          Tanner {preferences.copilot_enabled ? "On" : "Off"}
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={handleSignOut}>
           Sign Out
-        </button>
+        </Button>
       </div>
     </>
   );
@@ -416,6 +449,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <div className="flex min-w-0 flex-1 flex-col gap-[var(--space-16)]">
             <TopBar
               productName={BRANDING.name}
+              productHref="/directory"
+              moduleLabel={topModuleLabel}
               pageTitle={topTitle}
               subtitle={subtitle}
               showSearch={showSearch}
