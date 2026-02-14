@@ -30,11 +30,11 @@ export function ModuleSidebar({
 }: ModuleSidebarProps) {
   return (
     <div className="space-y-[var(--space-12)]">
-      <div className="ui-panel px-[var(--space-12)] py-[var(--space-12)]">
+      <div className="rounded-[var(--radius-card)] border border-[var(--sidebar-border)] bg-[linear-gradient(180deg,var(--sidebar-bg)_0%,var(--sidebar-bg-2)_100%)] px-[var(--space-12)] py-[var(--space-12)] shadow-[var(--shadow)]">
         <div className="flex items-center justify-between gap-[var(--space-8)]">
           <div className="min-w-0">
-            <p className="text-[11px] font-medium text-[var(--neutral-muted)]">Navigation</p>
-            <p className="ui-type-body mt-[var(--space-4)] truncate font-semibold text-[var(--neutral-text)]">
+            <p className="text-[11px] font-medium text-[var(--sidebar-text-muted)]">Navigation</p>
+            <p className="ui-type-body mt-[var(--space-4)] truncate font-semibold text-[var(--sidebar-text)]">
               {collapsed ? shortLabel(moduleName) : moduleName}
             </p>
           </div>
@@ -46,7 +46,7 @@ export function ModuleSidebar({
               onClick={onToggleCollapsed}
               aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
               title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              className="h-8 w-8 shrink-0"
+              className="h-8 w-8 shrink-0 text-[var(--sidebar-text)] hover:bg-[var(--sidebar-item-hover)] hover:text-[var(--sidebar-text)]"
             >
               {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
             </Button>

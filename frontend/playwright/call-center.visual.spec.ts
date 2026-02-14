@@ -39,6 +39,55 @@ const mockSnapshot = {
 };
 
 test("call center spreadsheet visual", async ({ page }) => {
+  await page.route("http://127.0.0.1:8000/api/v1/me/preferences", async (route) => {
+    if (route.request().method() === "PATCH") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          last_active_module: "call_center",
+          sidebar_collapsed: false,
+          copilot_enabled: false,
+          allowed_modules: [
+            "care_delivery",
+            "call_center",
+            "workforce",
+            "revenue_cycle",
+            "governance",
+            "administration",
+          ],
+          granted_permissions: [
+            "calls:read",
+            "leads:read",
+          ],
+        }),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        last_active_module: "call_center",
+        sidebar_collapsed: false,
+        copilot_enabled: false,
+        allowed_modules: [
+          "care_delivery",
+          "call_center",
+          "workforce",
+          "revenue_cycle",
+          "governance",
+          "administration",
+        ],
+        granted_permissions: [
+          "calls:read",
+          "leads:read",
+        ],
+      }),
+    });
+  });
+
   await page.route("http://127.0.0.1:8000/api/v1/auth/me", async (route) => {
     await route.fulfill({
       status: 200,

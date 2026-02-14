@@ -43,8 +43,13 @@ export function TopBar({
   className,
 }: TopBarProps) {
   return (
-    <header className={cn("ui-panel px-[var(--space-16)] py-[var(--space-12)]", className)}>
-      <div className="flex flex-col gap-[var(--space-12)] lg:flex-row lg:items-center lg:justify-between">
+    <header
+      className={cn(
+        "ui-panel relative overflow-hidden border-[var(--border)] bg-[linear-gradient(180deg,var(--surface)_0%,color-mix(in_srgb,var(--brand-primary-50)_46%,white)_100%)] px-[var(--space-16)] py-[var(--space-12)] shadow-[var(--shadow)] before:absolute before:inset-x-0 before:top-0 before:h-1 before:bg-[var(--brand-primary)]",
+        className,
+      )}
+    >
+      <div className="relative z-10 flex flex-col gap-[var(--space-12)] lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0 flex-1">
           <p className="flex items-center gap-[var(--space-6)] text-[11px] font-medium text-[var(--neutral-muted)]">
             {productHref ? (

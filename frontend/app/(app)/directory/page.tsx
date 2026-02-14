@@ -15,6 +15,7 @@ import { fetchMePreferences, patchMePreferences } from "@/lib/preferences";
 type DirectoryTile = {
   key: string;
   moduleId: ModuleId;
+  href: string;
   title: string;
   description: string;
   testId: string;
@@ -73,6 +74,7 @@ export default function DirectoryPage() {
       return {
         key: moduleDef.id,
         moduleId: moduleDef.id,
+        href: defaultRouteForModule(moduleDef.id),
         title: moduleDef.name,
         description: moduleDef.description,
         testId: `directory-module-${moduleDef.id}`,
@@ -88,6 +90,7 @@ export default function DirectoryPage() {
       moduleTiles.push({
         key: "sharepoint",
         moduleId: "administration",
+        href: "/sharepoint",
         title: "SharePoint",
         description: "Organization Information and SharePoint portal access.",
         testId: "directory-module-sharepoint",
@@ -215,6 +218,7 @@ export default function DirectoryPage() {
               <ModuleTileCard
                 key={tile.key}
                 moduleId={tile.moduleId}
+                href={tile.href}
                 title={tile.title}
                 description={tile.description}
                 onOpen={() => {

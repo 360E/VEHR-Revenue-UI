@@ -38,42 +38,27 @@ function normalizeGroupLabel(label: string): string {
   return `${normalized.slice(0, 1).toUpperCase()}${normalized.slice(1)}`;
 }
 
-function iconToken(label: string): string {
-  const first = label.replace(/[^a-zA-Z0-9]/g, "").slice(0, 1);
-  return first ? first.toUpperCase() : "N";
-}
-
-function iconClasses(item: SidebarNavItem): string {
-  const base =
-    "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-6)] border text-[10px] font-semibold transition-colors";
-
-  if (item.disabled) {
-    return cn(base, "border-[var(--neutral-border)] bg-[var(--neutral-panel)] text-[var(--neutral-muted)]");
+function collapsedToken(label: string): string {
+  const parts = label.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) {
+    return "N";
   }
-
-  if (item.active) {
-    return cn(
-      base,
-      "border-[color-mix(in_srgb,var(--primary)_28%,white)] bg-[color-mix(in_srgb,var(--primary)_16%,white)] text-[var(--primary)]",
-    );
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
   }
-
-  return cn(
-    base,
-    "border-[var(--neutral-border)] bg-[var(--neutral-panel)] text-[var(--neutral-muted)] group-hover:border-[color-mix(in_srgb,var(--primary)_20%,white)] group-hover:text-[var(--primary)]",
-  );
+  return `${parts[0].slice(0, 1)}${parts[1].slice(0, 1)}`.toUpperCase();
 }
 
 function itemClasses(item: SidebarNavItem, collapsed: boolean): string {
   const base =
-    "group relative flex min-h-[44px] w-full items-center justify-between gap-[var(--space-8)] rounded-[var(--radius-8)] border border-transparent px-[var(--space-8)] py-[var(--space-8)] text-left transition-[background-color,border-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1";
-  const collapseClasses = collapsed ? "justify-center px-[var(--space-4)]" : "";
+    "group relative flex min-h-[44px] w-full items-center justify-between gap-[var(--space-8)] rounded-[var(--radius-8)] border border-transparent py-[var(--space-8)] text-left transition-[background-color,border-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--sidebar-bg-2)]";
+  const collapseClasses = collapsed ? "justify-center px-[var(--space-6)]" : "px-[var(--space-10)]";
 
   if (item.disabled) {
     return cn(
       base,
       collapseClasses,
-      "cursor-not-allowed text-[var(--neutral-muted)] opacity-60",
+      "cursor-not-allowed text-[var(--sidebar-text-muted)] opacity-60",
     );
   }
 
@@ -81,36 +66,40 @@ function itemClasses(item: SidebarNavItem, collapsed: boolean): string {
     return cn(
       base,
       collapseClasses,
-      "bg-[color-mix(in_srgb,var(--primary)_10%,var(--neutral-panel))] text-[var(--neutral-text)] shadow-[var(--shadow-1)] before:absolute before:inset-y-[8px] before:left-[2px] before:w-[3px] before:rounded-full before:bg-[var(--primary)]",
+      "bg-[var(--sidebar-item-active)] text-[var(--sidebar-text)] shadow-[var(--shadow-sm)] before:absolute before:inset-y-[6px] before:left-0 before:w-[4px] before:rounded-full before:bg-[var(--sidebar-active-bar)]",
     );
   }
 
   return cn(
     base,
     collapseClasses,
-    "text-[var(--neutral-text)] hover:bg-[var(--muted)] hover:shadow-md",
+    "text-[var(--sidebar-text-muted)] hover:bg-[var(--sidebar-item-hover)] hover:text-[var(--sidebar-text)]",
   );
 }
 
 function SidebarNavEntry({ item, collapsed }: { item: SidebarNavItem; collapsed: boolean }) {
   const title = collapsed ? item.label : undefined;
+  const compactLabel = collapsedToken(item.label);
 
   const content = (
     <>
-      <span className={cn("flex min-w-0 items-center gap-[var(--space-8)]", collapsed && "justify-center")}>
-        <span className={iconClasses(item)} aria-hidden="true">
-          {item.icon ?? iconToken(item.label)}
-        </span>
+      <span className={cn("min-w-0", collapsed && "text-center")}>
         {!collapsed ? (
-          <span className="min-w-0">
-            <span className="block text-[length:var(--font-size-14)] font-semibold leading-tight">{item.label}</span>
+          <>
+            <span className={cn("block text-[length:var(--font-size-14)] leading-tight", item.active ? "font-semibold" : "font-medium")}>
+              {item.label}
+            </span>
             {item.description ? (
-              <span className="mt-[2px] block text-[length:var(--font-size-12)] text-[var(--neutral-muted)]">
+              <span className="mt-[2px] block text-[length:var(--font-size-12)] text-[var(--sidebar-text-muted)]">
                 {item.description}
               </span>
             ) : null}
+          </>
+        ) : (
+          <span className="text-[11px] font-semibold tracking-[0.04em] text-[var(--sidebar-text)]" aria-hidden="true">
+            {compactLabel}
           </span>
-        ) : null}
+        )}
       </span>
 
       {!collapsed && item.badge ? (
@@ -157,7 +146,7 @@ export function SidebarNav({ groups, collapsed = false, className, testId }: Sid
     <nav
       aria-label="Section navigation"
       className={cn(
-        "ui-panel flex flex-col gap-[var(--space-12)] p-[var(--space-12)]",
+        "flex flex-col gap-[var(--space-12)] rounded-[var(--radius-card)] border border-[var(--sidebar-border)] bg-[linear-gradient(180deg,var(--sidebar-bg)_0%,var(--sidebar-bg-2)_100%)] p-[var(--space-12)] shadow-[var(--shadow)]",
         collapsed && "items-center p-[var(--space-8)]",
         className,
       )}
@@ -171,11 +160,11 @@ export function SidebarNav({ groups, collapsed = false, className, testId }: Sid
             key={group.id}
             className={cn(
               "w-full space-y-[var(--space-8)]",
-              index > 0 && "border-t border-[var(--neutral-border)] pt-[var(--space-12)]",
+              index > 0 && "border-t border-[color-mix(in_srgb,var(--sidebar-text)_16%,transparent)] pt-[var(--space-12)]",
               collapsed && "space-y-[var(--space-6)]",
             )}
           >
-            <h2 className={cn("px-[var(--space-8)] text-[11px] font-medium text-[var(--neutral-muted)]", collapsed && "sr-only")}>
+            <h2 className={cn("px-[var(--space-8)] text-[11px] font-medium text-[var(--sidebar-text-muted)]", collapsed && "sr-only")}>
               {normalizeGroupLabel(group.label)}
             </h2>
             <ul className="space-y-[var(--space-4)]">

@@ -43,7 +43,12 @@ export function IntegrationStatusCard({
               <CardTitle className="truncate">{title}</CardTitle>
             </div>
           </div>
-          <Badge variant="outline" className={connected ? "border-emerald-300 text-emerald-700" : ""}>
+          <Badge
+            variant="outline"
+            className={connected
+              ? "border-[color-mix(in_srgb,var(--success)_34%,white)] bg-[color-mix(in_srgb,var(--success)_10%,white)] text-[var(--success)]"
+              : "text-[var(--neutral-muted)]"}
+          >
             {connected ? (
               <span className="inline-flex items-center gap-[var(--space-4)]">
                 <CheckCircle2 className="h-3.5 w-3.5" />

@@ -57,6 +57,41 @@ function displayRoleLabel(role: string | undefined): string {
     .join(" ");
 }
 
+function isTransientNetworkError(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    return error.status >= 500;
+  }
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return message.includes("failed to fetch")
+      || message.includes("networkerror")
+      || message.includes("load failed");
+  }
+  return false;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function runWithTransientRetry<T>(operation: () => Promise<T>, maxAttempts = 2): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientNetworkError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+      await delay(250 * attempt);
+    }
+  }
+  throw lastError;
+}
+
 export default function AppLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -89,10 +124,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       setIsCheckingSession(true);
       setSessionError(null);
       try {
-        const [me, prefs] = await Promise.all([
-          apiFetch<MeResponse>("/api/v1/auth/me", { cache: "no-store" }),
-          fetchMePreferences(),
-        ]);
+        const [me, prefs] = await runWithTransientRetry(
+          () =>
+            Promise.all([
+              apiFetch<MeResponse>("/api/v1/auth/me", { cache: "no-store" }),
+              fetchMePreferences(),
+            ]),
+          2,
+        );
         if (!isMounted) return;
         setCurrentUser(me);
         setPreferences(prefs);
@@ -130,6 +169,9 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     || pathname?.startsWith("/sharepoint/")
     || pathname === "/organization/home"
     || pathname?.startsWith("/organization/home/");
+  const activeMainCategoryId: ModuleId | "sharepoint" | null = isSharePointCategoryActive
+    ? "sharepoint"
+    : activeModuleId;
   const isMobile = viewportWidth < 1024;
 
   const grantedPermissions = useMemo(
@@ -153,7 +195,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       id: `module-${moduleDef.id}`,
       label: moduleDef.name,
       href: defaultRouteForModule(moduleDef.id),
-      active: moduleDef.id === activeModuleId,
+      active: moduleDef.id === activeMainCategoryId,
       testId: `module-main-${moduleDef.id.replace(/_/g, "-")}`,
     }));
 
@@ -167,34 +209,21 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       });
     }
 
-    const subcategoryItems = isSharePointCategoryActive
-      ? [
-        {
-          id: "sharepoint-organization-information",
-          label: "Organization Information",
-          href: "/sharepoint",
-          active: pathname === "/sharepoint"
-            || pathname?.startsWith("/sharepoint/")
-            || pathname === "/organization/home"
-            || pathname?.startsWith("/organization/home/"),
-          testId: "module-nav-organization-information",
-        },
-      ]
-      : activeModuleId
-        ? visibleModuleNavItems(activeModuleId, grantedPermissions).map((item) => {
-        const isInternal = item.href.startsWith("/");
-        const isActive = isInternal && (pathname === item.href || pathname?.startsWith(`${item.href}/`));
-        return {
-          id: `${activeModuleId}-${item.href}`,
-          label: item.label,
-          href: item.href,
-          external: item.external,
-          active: isActive,
-          description: item.external ? "Opens in a new tab" : undefined,
-          testId: `module-nav-${item.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-        };
-      })
-        : [];
+    const subcategoryItems = activeMainCategoryId && activeMainCategoryId !== "sharepoint"
+      ? visibleModuleNavItems(activeMainCategoryId, grantedPermissions).map((item) => {
+      const isInternal = item.href.startsWith("/");
+      const isActive = isInternal && (pathname === item.href || pathname?.startsWith(`${item.href}/`));
+      return {
+        id: `${activeMainCategoryId}-${item.href}`,
+        label: item.label,
+        href: item.href,
+        external: item.external,
+        active: isActive,
+        description: item.external ? "Opens in a new tab" : undefined,
+        testId: `module-nav-${item.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      };
+    })
+      : [];
 
     const groups: SidebarNavGroup[] = [];
     if (mainCategoryItems.length > 0) {
@@ -212,7 +241,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       });
     }
     return groups;
-  }, [activeModuleId, allowedModuleSet, allowedModules, grantedPermissions, isSharePointCategoryActive, pathname]);
+  }, [activeMainCategoryId, allowedModuleSet, allowedModules, grantedPermissions, isSharePointCategoryActive, pathname]);
 
   const showSidebarByDefault = !isDirectory && !!activeModule;
   const showSidebar = typeof layoutConfig.showSidebar === "boolean"
@@ -461,10 +490,10 @@ export default function AppLayout({ children }: { children: ReactNode }) {
               className={`fixed inset-0 z-40 bg-black/35 transition-opacity ${mobileSidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
             />
             <aside
-              className={`fixed left-0 top-0 z-50 h-full w-[86vw] max-w-[360px] bg-background p-[var(--space-16)] shadow-[var(--shadow-lg)] transition-transform duration-200 ${mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
+              className={`fixed left-0 top-0 z-50 h-full w-[86vw] max-w-[360px] bg-[linear-gradient(180deg,var(--sidebar-bg)_0%,var(--sidebar-bg-2)_100%)] p-[var(--space-16)] text-[var(--sidebar-text)] shadow-[var(--shadow-lg)] transition-transform duration-200 ${mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
             >
               <div className="mb-[var(--space-12)] flex items-center justify-between">
-                <p className="ui-type-section-title text-[var(--neutral-text)]">{activeModule?.name ?? "Module"}</p>
+                <p className="ui-type-section-title text-[var(--sidebar-text)]">{activeModule?.name ?? "Module"}</p>
                 <Button type="button" variant="outline" size="sm" onClick={() => setMobileSidebarOpen(false)}>
                   Close
                 </Button>

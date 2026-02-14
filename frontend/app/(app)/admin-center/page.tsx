@@ -368,27 +368,27 @@ export default function AdminCenterPage() {
   return (
     <div className="flex flex-col gap-8">
       <div className="space-y-3">
-        <p className="text-sm font-semibold text-slate-500">Admin</p>
-        <h1 className="text-[2rem] font-semibold tracking-tight text-slate-900">Admin Center</h1>
-        <p className="max-w-3xl text-base leading-7 text-slate-600">
+        <p className="text-sm font-semibold text-[var(--brand-primary-600)]">Admin</p>
+        <h1 className="text-[2rem] font-semibold tracking-tight text-[var(--neutral-text)]">Admin Center</h1>
+        <p className="max-w-3xl text-base leading-7 text-[var(--neutral-muted)]">
           Organization settings, users, roles, permissions, and integration status.
         </p>
       </div>
 
-      {isLoading ? <p className="text-sm text-slate-600">Loading admin center...</p> : null}
-      {loadError ? <p className="text-sm text-rose-700">{loadError}</p> : null}
+      {isLoading ? <p className="text-sm text-[var(--neutral-muted)]">Loading admin center...</p> : null}
+      {loadError ? <p className="text-sm text-[var(--status-critical)]">{loadError}</p> : null}
 
       {!isLoading && !loadError ? (
         <>
           <div className="grid gap-5 xl:grid-cols-[1.1fr_1fr]">
-            <Card className="bg-white shadow-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xl text-slate-900">Organization settings</CardTitle>
+            <Card className="border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow)]">
+              <CardHeader className="ui-card-header-accent pb-2">
+                <CardTitle className="text-xl text-[var(--neutral-text)]">Organization settings</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 pt-0">
                 <form className="space-y-3" onSubmit={handleSaveSettings}>
                   <div className="space-y-2">
-                    <label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500" htmlFor="org_name">
+                    <label className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--neutral-muted)]" htmlFor="org_name">
                       Organization name
                     </label>
                     <Input
@@ -403,15 +403,15 @@ export default function AdminCenterPage() {
                   </Button>
                 </form>
                 {settings ? (
-                  <p className="text-xs text-slate-500">Organization ID: {settings.organization_id}</p>
+                  <p className="text-xs text-[var(--neutral-muted)]">Organization ID: {settings.organization_id}</p>
                 ) : null}
-                {settingsMessage ? <p className="text-sm text-slate-700">{settingsMessage}</p> : null}
+                {settingsMessage ? <p className="text-sm text-[var(--neutral-text)]">{settingsMessage}</p> : null}
               </CardContent>
             </Card>
 
-            <Card className="bg-white shadow-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xl text-slate-900">Integrations status</CardTitle>
+            <Card className="border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow)]">
+              <CardHeader className="ui-card-header-accent pb-2">
+                <CardTitle className="text-xl text-[var(--neutral-text)]">Integrations status</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4 pt-0">
                 <IntegrationStatusCard
@@ -456,9 +456,9 @@ export default function AdminCenterPage() {
           </div>
 
           <div className="grid gap-5 xl:grid-cols-[1.1fr_1fr]">
-            <Card className="bg-white shadow-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xl text-slate-900">Users & roles</CardTitle>
+            <Card className="border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow)]">
+              <CardHeader className="ui-card-header-accent pb-2">
+                <CardTitle className="text-xl text-[var(--neutral-text)]">Users & roles</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4 pt-0">
                 <form className="grid gap-2 md:grid-cols-[1.2fr_1fr_auto]" onSubmit={handleInvite}>
@@ -484,7 +484,7 @@ export default function AdminCenterPage() {
                     {isInviting ? "Inviting..." : "Invite user"}
                   </Button>
                 </form>
-                {inviteMessage ? <p className="text-sm text-slate-700">{inviteMessage}</p> : null}
+                {inviteMessage ? <p className="text-sm text-[var(--neutral-text)]">{inviteMessage}</p> : null}
                 {inviteLinkFallback ? (
                   <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                     <p className="font-semibold">Manual invite link (email it to the user):</p>
@@ -529,13 +529,13 @@ export default function AdminCenterPage() {
                     </div>
                   ))}
                 </div>
-                {roleSaveMessage ? <p className="text-sm text-slate-700">{roleSaveMessage}</p> : null}
+                {roleSaveMessage ? <p className="text-sm text-[var(--neutral-text)]">{roleSaveMessage}</p> : null}
               </CardContent>
             </Card>
 
-            <Card className="bg-white shadow-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xl text-slate-900">Role permissions</CardTitle>
+            <Card className="border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow)]">
+              <CardHeader className="ui-card-header-accent pb-2">
+                <CardTitle className="text-xl text-[var(--neutral-text)]">Role permissions</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 pt-0">
                 <select
@@ -573,7 +573,7 @@ export default function AdminCenterPage() {
                 >
                   {isSavingPermissions ? "Saving..." : "Save permissions"}
                 </Button>
-                {permissionsMessage ? <p className="text-sm text-slate-700">{permissionsMessage}</p> : null}
+                {permissionsMessage ? <p className="text-sm text-[var(--neutral-text)]">{permissionsMessage}</p> : null}
               </CardContent>
             </Card>
           </div>

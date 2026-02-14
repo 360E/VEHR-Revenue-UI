@@ -208,11 +208,16 @@ body {
 }
 
 .ui-panel {
-  border: 1px solid color-mix(in srgb, var(--neutral-border) 72%, white);
+  border: 1px solid var(--border);
   border-radius: var(--radius-card);
-  background: var(--neutral-panel);
-  box-shadow: var(--shadow-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow);
   transition: box-shadow 150ms ease, border-color 150ms ease, background-color 150ms ease;
+}
+
+.ui-card-header-accent {
+  border-top: 3px solid var(--brand-primary);
+  background: linear-gradient(180deg, var(--brand-primary-50) 0%, var(--surface) 100%);
 }
 
 .ui-badge {

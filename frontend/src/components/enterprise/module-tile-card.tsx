@@ -1,10 +1,12 @@
+import Link from "next/link";
+
 import { ModuleId } from "@/lib/modules";
-import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 type ModuleTileCardProps = {
   moduleId: ModuleId;
+  href: string;
   title: string;
   description: string;
   onOpen: () => void;
@@ -47,6 +49,7 @@ function initialsFromLabel(label: string): string {
 
 export function ModuleTileCard({
   moduleId,
+  href,
   title,
   description,
   onOpen,
@@ -55,44 +58,50 @@ export function ModuleTileCard({
   className,
 }: ModuleTileCardProps) {
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      disabled={isOpening}
-      className={cn("h-full w-full rounded-xl text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1", className)}
-      data-testid={testId}
-      aria-label={`Open ${title}`}
+    <Card
+      className={cn(
+        "relative isolate flex h-full flex-col overflow-hidden border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow)]",
+        isOpening ? "opacity-80" : "",
+        className,
+      )}
     >
-      <Card
+      <Link
+        href={href}
+        onClick={(event) => {
+          event.preventDefault();
+          if (!isOpening) {
+            onOpen();
+          }
+        }}
         className={cn(
-          "relative flex h-full flex-col overflow-hidden border border-[var(--neutral-border)] bg-[var(--neutral-panel)]",
-          isOpening ? "opacity-75" : "",
+          "absolute inset-0 z-10 rounded-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1",
+          isOpening && "pointer-events-none",
         )}
-      >
-        <span className={cn("absolute inset-x-0 top-0 h-[3px]", ACCENT_BAR_CLASS[moduleId])} aria-hidden="true" />
-        <CardHeader className="pb-[var(--space-8)]">
-          <div className="flex items-start gap-[var(--space-12)]">
-            <span
-              className={cn(
-                "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-8)] border text-[length:var(--font-size-12)] font-semibold",
-                ACCENT_BADGE_CLASS[moduleId],
-              )}
-              aria-hidden="true"
-            >
-              {initialsFromLabel(title)}
-            </span>
-            <div className="min-w-0 space-y-[var(--space-4)]">
-              <CardTitle className="ui-type-section-title text-[var(--neutral-text)]">{title}</CardTitle>
-              <p className="ui-type-body line-clamp-2 text-[var(--neutral-muted)]">{description}</p>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="mt-auto pt-0">
-          <span className={cn(buttonVariants({ size: "sm" }), "pointer-events-none")}>
-            {isOpening ? "Opening..." : "Open"}
+        data-testid={testId}
+        aria-label={`Open ${title} module`}
+      />
+
+      <span className={cn("absolute inset-x-0 top-0 h-[4px]", ACCENT_BAR_CLASS[moduleId])} aria-hidden="true" />
+      <CardHeader className="relative z-20 pointer-events-none pb-[var(--space-8)]">
+        <div className="flex items-start gap-[var(--space-12)]">
+          <span
+            className={cn(
+              "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-8)] border text-[length:var(--font-size-12)] font-semibold",
+              ACCENT_BADGE_CLASS[moduleId],
+            )}
+            aria-hidden="true"
+          >
+            {initialsFromLabel(title)}
           </span>
-        </CardContent>
-      </Card>
-    </button>
+          <div className="min-w-0 space-y-[var(--space-4)]">
+            <CardTitle className="ui-type-section-title text-[var(--neutral-text)]">{title}</CardTitle>
+            <p className="ui-type-body line-clamp-2 text-[var(--neutral-muted)]">{description}</p>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="relative z-20 pointer-events-none mt-auto pt-0">
+        {isOpening ? <p className="ui-type-meta text-[var(--brand-primary)]">Launching module...</p> : null}
+      </CardContent>
+    </Card>
   );
 }

@@ -24,6 +24,25 @@ type MeResponse = {
   organization_id: string;
 };
 
+function isTransientNetworkError(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    return error.status >= 500;
+  }
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return message.includes("failed to fetch")
+      || message.includes("networkerror")
+      || message.includes("load failed");
+  }
+  return false;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 export default function LoginPage() {
   const router = useRouter();
 
@@ -59,6 +78,44 @@ export default function LoginPage() {
     };
   }, [router]);
 
+  async function submitLoginWithRetry(payload: { email: string; password: string; organization_id?: string }) {
+    let lastError: unknown;
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await apiFetch<TokenResponse>("/api/v1/auth/login", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+      } catch (error) {
+        lastError = error;
+        if (!isTransientNetworkError(error) || attempt === maxAttempts) {
+          throw error;
+        }
+        await delay(300 * attempt);
+      }
+    }
+    throw lastError;
+  }
+
+  async function verifySessionAfterLogin() {
+    let lastError: unknown;
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        await apiFetch<MeResponse>("/api/v1/auth/me", { cache: "no-store" });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (!isTransientNetworkError(error) || attempt === maxAttempts) {
+          throw error;
+        }
+        await delay(250 * attempt);
+      }
+    }
+    throw lastError;
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
@@ -85,12 +142,9 @@ export default function LoginPage() {
         payload.organization_id = organizationId.trim();
       }
 
-      const response = await apiFetch<TokenResponse>("/api/v1/auth/login", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-
+      const response = await submitLoginWithRetry(payload);
       persistAccessToken(response.access_token);
+      await verifySessionAfterLogin();
       router.replace("/directory");
     } catch (submitError) {
       const message = submitError instanceof ApiError || submitError instanceof Error

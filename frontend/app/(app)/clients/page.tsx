@@ -80,21 +80,21 @@ export default function ClientsPage() {
   return (
     <div className="flex flex-col gap-8">
       <div className="space-y-3">
-        <p className="text-sm font-semibold text-slate-500">People</p>
-        <h1 className="text-[2rem] font-semibold tracking-tight text-slate-900">Clients</h1>
-        <p className="max-w-2xl text-base leading-7 text-slate-600">Relationship hub for status, ownership, tasks, activity, and documents.</p>
+        <p className="text-sm font-semibold text-[var(--brand-primary-600)]">People</p>
+        <h1 className="text-[2rem] font-semibold tracking-tight text-[var(--neutral-text)]">Clients</h1>
+        <p className="max-w-2xl text-base leading-7 text-[var(--neutral-muted)]">Relationship hub for status, ownership, tasks, activity, and documents.</p>
       </div>
 
-      {error ? <p className="text-sm text-rose-700">{error}</p> : null}
+      {error ? <p className="text-sm text-[var(--status-critical)]">{error}</p> : null}
 
       <div className="grid gap-5 xl:grid-cols-[1fr_2fr]">
-        <Card className="bg-white shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-xl text-slate-900">Client list</CardTitle>
+        <Card className="border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow)]">
+          <CardHeader className="ui-card-header-accent pb-2">
+            <CardTitle className="text-xl text-[var(--neutral-text)]">Client list</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 pt-0">
             {clients.length === 0 ? (
-              <p className="text-sm text-slate-500">No clients available.</p>
+              <p className="text-sm text-[var(--neutral-muted)]">No clients available.</p>
             ) : (
               clients.map((client) => (
                 <button
@@ -102,39 +102,43 @@ export default function ClientsPage() {
                   type="button"
                   onClick={() => setSelectedClientId(client.id)}
                   className={`w-full rounded-lg px-3 py-2 text-left transition-colors ${
-                    selectedClientId === client.id ? "bg-blue-50 text-blue-900" : "bg-slate-50 text-slate-800 hover:bg-slate-100"
+                    selectedClientId === client.id
+                      ? "bg-[var(--brand-primary-50)] text-[var(--brand-primary-600)]"
+                      : "bg-[var(--surface-muted)] text-[var(--neutral-text)] hover:bg-[color-mix(in_srgb,var(--brand-primary-50)_52%,white)]"
                   }`}
                 >
                   <p className="text-sm font-semibold">{client.last_name}, {client.first_name}</p>
-                  <p className="mt-1 text-xs text-slate-500">Client ID: {client.id}</p>
+                  <p className="mt-1 text-xs text-[var(--neutral-muted)]">Client ID: {client.id}</p>
                 </button>
               ))
             )}
           </CardContent>
         </Card>
 
-        <Card className="bg-white shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-xl text-slate-900">Client profile</CardTitle>
+        <Card className="border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow)]">
+          <CardHeader className="ui-card-header-accent pb-2">
+            <CardTitle className="text-xl text-[var(--neutral-text)]">Client profile</CardTitle>
           </CardHeader>
           <CardContent className="space-y-5 pt-0">
             {!selectedClient ? (
-              <p className="text-sm text-slate-500">Select a client to view details.</p>
+              <p className="text-sm text-[var(--neutral-muted)]">Select a client to view details.</p>
             ) : (
               <>
-                <div className="rounded-lg bg-slate-50 px-4 py-3">
-                  <p className="text-base font-semibold text-slate-900">{selectedClient.first_name} {selectedClient.last_name}</p>
-                  <p className="mt-1 text-sm text-slate-600">Current status: <span className="font-semibold text-slate-800">{stage}</span></p>
+                <div className="rounded-lg bg-[var(--brand-primary-50)] px-4 py-3">
+                  <p className="text-base font-semibold text-[var(--neutral-text)]">{selectedClient.first_name} {selectedClient.last_name}</p>
+                  <p className="mt-1 text-sm text-[var(--neutral-muted)]">Current status: <span className="font-semibold text-[var(--brand-primary-600)]">{stage}</span></p>
                 </div>
 
                 <div>
-                  <p className="text-sm font-semibold text-slate-700">Status progression</p>
+                  <p className="text-sm font-semibold text-[var(--neutral-text)]">Status progression</p>
                   <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {stageOrder.map((item) => (
                       <div
                         key={item}
                         className={`rounded-lg px-3 py-2 text-xs font-semibold ${
-                          item === stage ? "bg-blue-50 text-blue-900" : "bg-slate-100 text-slate-600"
+                          item === stage
+                            ? "bg-[var(--brand-primary-50)] text-[var(--brand-primary-600)]"
+                            : "bg-[var(--surface-muted)] text-[var(--neutral-muted)]"
                         }`}
                       >
                         {item}
@@ -145,18 +149,18 @@ export default function ClientsPage() {
 
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
-                    <p className="text-sm font-semibold text-slate-700">Assigned staff</p>
+                    <p className="text-sm font-semibold text-[var(--neutral-text)]">Assigned staff</p>
                     {assignedStaff.map((person) => (
-                      <div key={person} className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      <div key={person} className="rounded-lg bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--neutral-text)]">
                         {person}
                       </div>
                     ))}
                   </div>
 
                   <div className="space-y-2">
-                    <p className="text-sm font-semibold text-slate-700">Open tasks</p>
+                    <p className="text-sm font-semibold text-[var(--neutral-text)]">Open tasks</p>
                     {openTasks.map((task) => (
-                      <div key={task} className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      <div key={task} className="rounded-lg bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--neutral-text)]">
                         {task}
                       </div>
                     ))}
@@ -165,18 +169,18 @@ export default function ClientsPage() {
 
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
-                    <p className="text-sm font-semibold text-slate-700">Activity timeline</p>
+                    <p className="text-sm font-semibold text-[var(--neutral-text)]">Activity timeline</p>
                     {timeline.map((item) => (
-                      <div key={item} className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      <div key={item} className="rounded-lg bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--neutral-text)]">
                         {item}
                       </div>
                     ))}
                   </div>
 
                   <div className="space-y-2">
-                    <p className="text-sm font-semibold text-slate-700">Linked documents</p>
+                    <p className="text-sm font-semibold text-[var(--neutral-text)]">Linked documents</p>
                     {linkedDocuments.map((document) => (
-                      <div key={document} className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      <div key={document} className="rounded-lg bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--neutral-text)]">
                         {document}
                       </div>
                     ))}
