@@ -12,11 +12,13 @@ from app.core.security import JWT_ALGORITHM, create_access_token, hash_password
 from app.db.base import Base
 from app.db.models.audit_event import AuditEvent
 from app.db.models.integration_account import IntegrationAccount
+from app.db.models.user_microsoft_connection import UserMicrosoftConnection
 from app.db.models.organization import Organization
 from app.db.models.organization_membership import OrganizationMembership
 from app.db.models.user import User
 from app.db.session import get_db
 from app.main import app
+from app.services.integration_tokens import decrypt_token
 
 
 def _auth_header(token: str) -> dict[str, str]:
@@ -183,6 +185,18 @@ def test_microsoft_connect_and_callback_upserts_account(tmp_path, monkeypatch) -
             assert row.refresh_token_enc
             assert row.refresh_token_enc != "refresh-token-value"
             assert row.revoked_at is None
+
+            connection = db.execute(select(UserMicrosoftConnection)).scalar_one()
+            assert connection.organization_id == org_id
+            assert connection.user_id == user_id
+            assert connection.tenant_id == "tenant-123"
+            assert connection.msft_user_id == "oid-456"
+            assert "offline_access" in set(connection.scopes)
+            assert "User.Read" in set(connection.scopes)
+            assert connection.token_cache_encrypted
+            decrypted_cache = decrypt_token(connection.token_cache_encrypted)
+            assert isinstance(decrypted_cache, str)
+            assert decrypted_cache.strip().startswith("{")
 
             audit_event = db.execute(
                 select(AuditEvent).where(AuditEvent.action == "microsoft.connected")

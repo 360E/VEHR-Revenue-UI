@@ -9,6 +9,9 @@ from app.db.models.analytics_metric import AnalyticsMetric  # noqa: F401
 from app.db.models.bi_report import BIReport  # noqa: F401
 from app.db.models.ai_message import AiMessage  # noqa: F401
 from app.db.models.ai_thread import AiThread  # noqa: F401
+from app.db.models.assistant_memory_item import AssistantMemoryItem  # noqa: F401
+from app.db.models.assistant_notification import AssistantNotification  # noqa: F401
+from app.db.models.assistant_reminder import AssistantReminder  # noqa: F401
 from app.db.models.announcement import Announcement  # noqa: F401
 from app.db.models.clinical_audit_finding import ClinicalAuditFinding  # noqa: F401
 from app.db.models.clinical_audit_run import ClinicalAuditRun  # noqa: F401
@@ -23,6 +26,7 @@ from app.db.models.form_template import FormTemplate  # noqa: F401
 from app.db.models.generated_report import GeneratedReport  # noqa: F401
 from app.db.models.integration_account import IntegrationAccount  # noqa: F401
 from app.db.models.integration_token import IntegrationToken  # noqa: F401
+from app.db.models.user_microsoft_connection import UserMicrosoftConnection  # noqa: F401
 from app.db.models.invite import Invite  # noqa: F401
 from app.db.models.live_call import LiveCall  # noqa: F401
 from app.db.models.organization import Organization  # noqa: F401

@@ -17,6 +17,10 @@ frontend/.next/
 .env.local
 .env.*.local
 
+# Local secrets / notes
+Entra app.txt
+doc intelligence end point.txt
+
 *.log
 
 # Playwright / test artifacts
@@ -26,3 +30,6 @@ frontend/test-results/
 # Power BI authoring files (local only)
 *.pbix
 power BI stuff.txt
+
+# Local tooling folders that should never be committed
+app/api/v1/endpoints/Fabric codex/

@@ -1,3 +1,4 @@
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -9,7 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models.integration_account import IntegrationAccount
+from app.services.graph_client import (
+    MicrosoftGraphClientError,
+    MicrosoftGraphNotConnectedError,
+    acquire_graph_token,
+)
 from app.services.integration_tokens import TokenEncryptionError, decrypt_token, encrypt_token
+
+logger = logging.getLogger(__name__)
 
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 MICROSOFT_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
@@ -302,6 +310,27 @@ def _access_token_for_user(
         cached = _cached_access_token(account_id=account.id)
         if cached:
             return cached, account
+
+    # Prefer MSAL token cache when available, but fall back to refresh-token flow.
+    try:
+        scopes = [item.strip() for item in _graph_scopes().split() if item.strip()]
+        access_token = acquire_graph_token(
+            db=db,
+            organization_id=organization_id,
+            user_id=user_id,
+            scopes=scopes or None,
+            force_refresh=force_refresh,
+        )
+        _cache_access_token(
+            account_id=account.id,
+            access_token=access_token,
+            expires_in_seconds=3600,
+        )
+        return access_token, account
+    except MicrosoftGraphNotConnectedError:
+        pass
+    except MicrosoftGraphClientError as exc:
+        logger.warning("Microsoft Graph MSAL token acquisition failed: %s", exc.detail)
 
     return _refresh_access_token(db=db, account=account), account
 

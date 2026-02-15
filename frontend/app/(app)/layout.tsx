@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Bell, Brain } from "lucide-react";
 
-import CopilotDrawer from "../components/copilot-drawer";
+import EnterpriseAssistantDock from "@/components/enterprise/EnterpriseAssistantDock";
 import { ModuleSidebar } from "@/components/app-shell/module-sidebar";
 import { TopBar } from "@/components/app-shell/top-bar";
 import { Badge } from "@/components/ui/badge";
@@ -353,12 +353,20 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     router.replace("/login");
   }
 
-  async function handleOpenTanner() {
+  async function handleOpenAssistant() {
     if (!preferences?.copilot_enabled) {
       await updatePreferences({ copilot_enabled: true });
     }
-    const trigger = document.querySelector<HTMLButtonElement>("[data-testid='copilot-trigger']");
-    trigger?.click();
+
+    // If we just enabled the dock, it may not be in the DOM yet. Retry briefly.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const trigger = document.querySelector<HTMLButtonElement>("[data-testid='copilot-trigger']");
+      if (trigger) {
+        trigger.click();
+        return;
+      }
+      await delay(50);
+    }
   }
 
   if (isCheckingSession) {
@@ -412,11 +420,11 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         variant="secondary"
         size="sm"
         onClick={() => {
-          void handleOpenTanner();
+          void handleOpenAssistant();
         }}
       >
         <Brain className="h-4 w-4" />
-        Tanner AI
+        Assistant
       </Button>
 
       <div className="inline-flex items-center gap-[var(--space-8)] rounded-xl border border-[var(--neutral-border)] bg-[var(--neutral-panel)] px-[var(--space-8)] py-[6px]">
@@ -437,7 +445,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           size="sm"
           onClick={() => updatePreferences({ copilot_enabled: !preferences.copilot_enabled })}
         >
-          Tanner {preferences.copilot_enabled ? "On" : "Off"}
+          Assistant {preferences.copilot_enabled ? "On" : "Off"}
         </Button>
         <Button type="button" variant="ghost" size="sm" onClick={handleSignOut}>
           Sign Out
@@ -512,7 +520,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           </>
         ) : null}
 
-        {preferences.copilot_enabled ? <CopilotDrawer /> : null}
+        {preferences.copilot_enabled ? <EnterpriseAssistantDock /> : null}
       </div>
     </AppLayoutConfigContext.Provider>
   );

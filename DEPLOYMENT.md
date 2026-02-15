@@ -66,8 +66,19 @@ Render supplies `PORT` automatically for the Docker container.
 
 `NEXT_PUBLIC_API_BASE_URL` = `https://<your-render-service-domain>`
 `NEXT_PUBLIC_API_TOKEN` = `Bearer token` (optional for dev; use a token from `/api/v1/auth/login`)
+`NEXT_PUBLIC_AUTH_COOKIE_DOMAIN` = `.360-encompass.com` (optional; ensures auth cookies are sent to both app + api subdomains)
 
 3. Build with the default Next.js build command. The API base URL is used for all frontend requests.
+
+**Assistant SSE (Notifications Stream)**
+The Enterprise Assistant notifications stream (`GET /api/v1/ai/notifications/stream`) authenticates via cookies (EventSource `withCredentials: true`).
+
+Requirements:
+1. **CORS must list explicit origins** in `CORS_ALLOWED_ORIGINS` (no wildcard `"*"`), because the API uses `allow_credentials=True`.
+2. Cookies must be scoped so the API host receives them:
+   - For production subdomains, set `NEXT_PUBLIC_AUTH_COOKIE_DOMAIN` (frontend) so the `vehr_access_token` cookie is valid for the API domain.
+   - For local dev, keep frontend + API on the same hostname (`localhost` vs `127.0.0.1` matters for cookies).
+3. Transition-only fallback (dev only): `FEATURE_SSE_QUERY_TOKEN_COMPAT=true` temporarily allows `?access_token=...` on the SSE URL. Leave this **off** in production.
 
 **Operational Checklist**
 1. Confirm `DATABASE_URL` is set for Alembic, Render, and any local scripts.

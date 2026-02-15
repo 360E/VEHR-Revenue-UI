@@ -21,6 +21,8 @@ class AiMessage(Base):
     role: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     # Encrypted-at-rest payload using INTEGRATION_TOKEN_KEY.
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Optional JSON metadata (agent_id, tool_calls, workstation_id, etc).
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now, index=True)
 
     thread: Mapped["AiThread"] = relationship(

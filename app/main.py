@@ -57,9 +57,23 @@ def get_cors_origins() -> list[str]:
     if not raw:
         return default_origins
     if raw == "*":
-        return ["*"]
+        # Credentials-based auth (cookies) must not use wildcard origins.
+        logger.warning("CORS_ALLOWED_ORIGINS='*' is unsafe with allow_credentials; using defaults instead.")
+        return default_origins
+
     configured = [origin.strip() for origin in raw.split(",") if origin.strip()]
-    return sorted(set(configured + default_origins))
+    if not configured:
+        logger.warning("CORS_ALLOWED_ORIGINS was set but empty; using defaults instead.")
+        return default_origins
+
+    # Do not silently allow localhost/default domains once explicit origins are configured.
+    if "*" in configured:
+        logger.warning("CORS_ALLOWED_ORIGINS included '*', which is unsafe with allow_credentials; ignoring '*'.")
+        configured = [origin for origin in configured if origin != "*"]
+        if not configured:
+            return default_origins
+
+    return sorted(set(configured))
 
 
 @asynccontextmanager

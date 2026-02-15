@@ -2,14 +2,14 @@ const TOKEN_STORAGE_KEYS = ["vehr_access_token", "access_token"] as const;
 const TOKEN_COOKIE_KEYS = ["vehr_access_token", "access_token"] as const;
 const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7;
 const CUTOVER_FRONTEND_HOST_SUFFIX = ".360-encompass.com";
-const PUBLIC_COOKIE_DOMAIN_ENV_KEY = "NEXT_PUBLIC_AUTH_COOKIE_DOMAIN";
 
 function getCookieDomainAttribute(): string {
   if (typeof window === "undefined") {
     return "";
   }
 
-  const configuredDomain = process.env[PUBLIC_COOKIE_DOMAIN_ENV_KEY]?.trim();
+  // Next.js only inlines NEXT_PUBLIC_* env vars when accessed statically.
+  const configuredDomain = process.env.NEXT_PUBLIC_AUTH_COOKIE_DOMAIN?.trim();
   if (configuredDomain) {
     return `; Domain=${configuredDomain}`;
   }

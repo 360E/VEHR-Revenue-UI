@@ -1,3 +1,5 @@
+import base64
+import json
 import logging
 import os
 import secrets
@@ -5,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
+import msal
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse, StreamingResponse
@@ -17,6 +20,7 @@ from app.core.deps import get_current_membership, require_permission
 from app.core.security import JWT_ALGORITHM, JWT_SECRET
 from app.db.models.integration_account import IntegrationAccount
 from app.db.models.organization_membership import OrganizationMembership
+from app.db.models.user_microsoft_connection import UserMicrosoftConnection
 from app.db.session import get_db
 from app.services.audit import log_event
 from app.services.integration_tokens import TokenEncryptionError, encrypt_token
@@ -208,41 +212,6 @@ def _raise_graph_error(exc: MicrosoftGraphServiceError) -> None:
     ) from exc
 
 
-def _exchange_code_for_tokens(*, code: str, settings: dict[str, str]) -> dict[str, Any]:
-    payload = {
-        "client_id": settings["client_id"],
-        "client_secret": settings["client_secret"],
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": settings["redirect_uri"],
-        "scope": settings["scopes"],
-    }
-
-    try:
-        response = httpx.post(
-            MICROSOFT_TOKEN_URL,
-            data=payload,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=20.0,
-        )
-    except httpx.HTTPError as exc:
-        raise ValueError("token_exchange_failed") from exc
-
-    body: dict[str, Any] = {}
-    try:
-        body = response.json()
-    except Exception:
-        body = {}
-
-    if response.status_code >= 400:
-        error_code = str(body.get("error", "")).strip() or f"http_{response.status_code}"
-        raise ValueError(f"token_exchange_{_sanitize_reason(error_code)}")
-
-    if not isinstance(body, dict):
-        raise ValueError("invalid_token_response")
-    return body
-
-
 def _id_token_identity(id_token: str) -> tuple[str, str, str | None]:
     try:
         claims = jwt.get_unverified_claims(id_token)
@@ -259,50 +228,22 @@ def _id_token_identity(id_token: str) -> tuple[str, str, str | None]:
     return external_tenant_id, external_user_id, email
 
 
-def _upsert_integration_account(
-    *,
-    db: Session,
-    organization_id: str,
-    user_id: str,
-    external_tenant_id: str,
-    external_user_id: str,
-    email: str | None,
-    scopes: str,
-    refresh_token_enc: str,
-) -> IntegrationAccount:
-    row = db.execute(
-        select(IntegrationAccount).where(
-            IntegrationAccount.organization_id == organization_id,
-            IntegrationAccount.provider == "microsoft",
-            IntegrationAccount.external_tenant_id == external_tenant_id,
-            IntegrationAccount.external_user_id == external_user_id,
-        )
-    ).scalar_one_or_none()
-
-    if row:
-        row.user_id = user_id
-        row.email = email
-        row.scopes = scopes
-        row.refresh_token_enc = refresh_token_enc
-        row.revoked_at = None
-        db.add(row)
-    else:
-        row = IntegrationAccount(
-            organization_id=organization_id,
-            user_id=user_id,
-            provider="microsoft",
-            external_tenant_id=external_tenant_id,
-            external_user_id=external_user_id,
-            email=email,
-            scopes=scopes,
-            refresh_token_enc=refresh_token_enc,
-            revoked_at=None,
-        )
-        db.add(row)
-
-    db.commit()
-    db.refresh(row)
-    return row
+def _authorization_url_for_membership(membership: OrganizationMembership) -> str:
+    settings = _microsoft_oauth_settings()
+    state = _encode_state(
+        organization_id=membership.organization_id,
+        user_id=membership.user_id,
+        return_to=settings["post_connect_redirect"],
+    )
+    query = {
+        "client_id": settings["client_id"],
+        "response_type": "code",
+        "redirect_uri": settings["redirect_uri"],
+        "response_mode": "query",
+        "scope": settings["scopes"],
+        "state": state,
+    }
+    return f"{MICROSOFT_AUTHORIZE_URL}?{urlencode(query)}"
 
 
 @router.get("/integrations/microsoft/connect")
@@ -311,31 +252,13 @@ def microsoft_connect(
     _: None = Depends(require_permission("org:manage")),
 ) -> MicrosoftConnectResponse:
     try:
-        settings = _microsoft_oauth_settings()
+        auth_url = _authorization_url_for_membership(membership)
     except MicrosoftOAuthConfigError as exc:
         logger.error("Microsoft OAuth connect configuration error: %s", str(exc))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Microsoft integration is not configured",
         ) from exc
-
-    state = _encode_state(
-        organization_id=membership.organization_id,
-        user_id=membership.user_id,
-        return_to=settings["post_connect_redirect"],
-    )
-
-    query = urlencode(
-        {
-            "client_id": settings["client_id"],
-            "response_type": "code",
-            "redirect_uri": settings["redirect_uri"],
-            "response_mode": "query",
-            "scope": settings["scopes"],
-            "state": state,
-        }
-    )
-    auth_url = f"{MICROSOFT_AUTHORIZE_URL}?{query}"
     return MicrosoftConnectResponse(authorization_url=auth_url)
 
 
@@ -580,8 +503,8 @@ def microsoft_callback(
         return _redirect_to_post_connect(status_value="error", reason="missing_code_or_state")
 
     try:
-        settings = _microsoft_oauth_settings()
         decoded_state = _decode_state(state)
+        settings = _microsoft_oauth_settings()
         membership = _ensure_membership_for_state(
             db=db,
             organization_id=decoded_state["org_id"],
@@ -626,6 +549,30 @@ def microsoft_callback(
                 "external_user_id": external_user_id,
             },
         )
+
+        # Best-effort: persist an MSAL token cache for newer Graph client flows.
+        try:
+            scopes_list = _split_scopes(scopes)
+            token_cache_encrypted = _build_token_cache_encrypted(
+                token_response=token_response,
+                client_id=settings["client_id"],
+                tenant_id=external_tenant_id,
+                msft_user_id=external_user_id,
+                scopes=scopes_list,
+                id_token=id_token,
+            )
+            _upsert_user_microsoft_connection(
+                db=db,
+                organization_id=decoded_state["org_id"],
+                user_id=decoded_state["user_id"],
+                tenant_id=external_tenant_id,
+                msft_user_id=external_user_id,
+                scopes=scopes_list,
+                token_cache_encrypted=token_cache_encrypted,
+            )
+        except Exception:
+            db.rollback()
+            logger.exception("Microsoft OAuth token cache persistence failed")
     except MicrosoftOAuthConfigError as exc:
         logger.error("Microsoft OAuth callback configuration error: %s", str(exc))
         db.rollback()
@@ -644,3 +591,169 @@ def microsoft_callback(
         return _redirect_to_post_connect(status_value="error", reason="unexpected_error")
 
     return _redirect_to_post_connect(status_value="connected")
+
+
+def _exchange_code_for_tokens(*, code: str, settings: dict[str, str]) -> dict[str, Any]:
+    payload = {
+        "client_id": settings["client_id"],
+        "client_secret": settings["client_secret"],
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": settings["redirect_uri"],
+        "scope": settings["scopes"],
+    }
+
+    try:
+        response = httpx.post(
+            MICROSOFT_TOKEN_URL,
+            data=payload,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=20.0,
+        )
+    except httpx.HTTPError as exc:
+        raise ValueError("token_exchange_failed") from exc
+
+    body: dict[str, Any] = {}
+    try:
+        body = response.json()
+    except Exception:
+        body = {}
+
+    if response.status_code >= 400:
+        error_code = str(body.get("error", "")).strip() or f"http_{response.status_code}"
+        raise ValueError(f"token_exchange_{_sanitize_reason(error_code)}")
+
+    if not isinstance(body, dict):
+        raise ValueError("invalid_token_response")
+    return body
+
+
+def _upsert_integration_account(
+    *,
+    db: Session,
+    organization_id: str,
+    user_id: str,
+    external_tenant_id: str,
+    external_user_id: str,
+    email: str | None,
+    scopes: str,
+    refresh_token_enc: str,
+) -> IntegrationAccount:
+    row = db.execute(
+        select(IntegrationAccount).where(
+            IntegrationAccount.organization_id == organization_id,
+            IntegrationAccount.provider == "microsoft",
+            IntegrationAccount.external_tenant_id == external_tenant_id,
+            IntegrationAccount.external_user_id == external_user_id,
+        )
+    ).scalar_one_or_none()
+
+    if row:
+        row.user_id = user_id
+        row.email = email
+        row.scopes = scopes
+        row.refresh_token_enc = refresh_token_enc
+        row.revoked_at = None
+        db.add(row)
+    else:
+        row = IntegrationAccount(
+            organization_id=organization_id,
+            user_id=user_id,
+            provider="microsoft",
+            external_tenant_id=external_tenant_id,
+            external_user_id=external_user_id,
+            email=email,
+            scopes=scopes,
+            refresh_token_enc=refresh_token_enc,
+            revoked_at=None,
+        )
+        db.add(row)
+
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _split_scopes(raw_scopes: str) -> list[str]:
+    items = [item.strip() for item in (raw_scopes or "").split() if item.strip()]
+    ordered: list[str] = []
+    for item in items:
+        if item not in ordered:
+            ordered.append(item)
+    return ordered
+
+
+def _encode_client_info(*, uid: str, utid: str) -> str:
+    payload = json.dumps({"uid": uid, "utid": utid}, separators=(",", ":"), default=str).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("utf-8").rstrip("=")
+
+
+def _build_token_cache_encrypted(
+    *,
+    token_response: dict[str, Any],
+    client_id: str,
+    tenant_id: str,
+    msft_user_id: str,
+    scopes: list[str],
+    id_token: str,
+) -> str:
+    # Build an MSAL cache payload without re-redeeming the one-time auth code.
+    cache = msal.SerializableTokenCache()
+    claims = jwt.get_unverified_claims(id_token)
+
+    augmented_response = dict(token_response)
+    augmented_response["id_token_claims"] = claims
+    augmented_response.setdefault("client_info", _encode_client_info(uid=msft_user_id, utid=tenant_id))
+
+    cache.add(
+        {
+            "client_id": client_id,
+            "scope": scopes,
+            "token_endpoint": f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+            "grant_type": "authorization_code",
+            "response": augmented_response,
+        }
+    )
+    return encrypt_token(cache.serialize())
+
+
+def _upsert_user_microsoft_connection(
+    *,
+    db: Session,
+    organization_id: str,
+    user_id: str,
+    tenant_id: str,
+    msft_user_id: str | None,
+    scopes: list[str],
+    token_cache_encrypted: str,
+) -> UserMicrosoftConnection:
+    row = db.execute(
+        select(UserMicrosoftConnection).where(
+            UserMicrosoftConnection.organization_id == organization_id,
+            UserMicrosoftConnection.user_id == user_id,
+        )
+    ).scalar_one_or_none()
+
+    if row:
+        if msft_user_id and row.msft_user_id and row.msft_user_id != msft_user_id:
+            row.todo_list_id = None
+        row.tenant_id = tenant_id
+        row.msft_user_id = msft_user_id
+        row.scopes = scopes
+        row.token_cache_encrypted = token_cache_encrypted
+        db.add(row)
+    else:
+        row = UserMicrosoftConnection(
+            organization_id=organization_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            msft_user_id=msft_user_id,
+            scopes=scopes,
+            token_cache_encrypted=token_cache_encrypted,
+            todo_list_id=None,
+        )
+        db.add(row)
+
+    db.commit()
+    db.refresh(row)
+    return row
