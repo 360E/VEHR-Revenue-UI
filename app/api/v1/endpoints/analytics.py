@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 import time
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_membership, require_permission
 from app.core.rbac import normalize_role_key
+from app.db.models.analytics_ai_audit_log import AnalyticsAiAuditLog
 from app.db.models.analytics_alert import AnalyticsAlert
 from app.db.models.analytics_metric import AnalyticsMetric
 from app.db.models.organization_membership import OrganizationMembership
@@ -604,3 +606,594 @@ def resolve_analytics_alert(
         },
     )
     return _serialize_alert(row)
+
+
+class AnalyticsAiFilters(BaseModel):
+    start: dt.date | None = None
+    end: dt.date | None = None
+    facility_id: str | None = None
+    program_id: str | None = None
+    provider_id: str | None = None
+    payer_id: str | None = None
+
+
+class AnalyticsAiQueryRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=12000)
+    report_key: str | None = None
+    filters: AnalyticsAiFilters | None = None
+
+
+class AnalyticsAiEvidenceMetric(BaseModel):
+    metric_key: str
+    label: str
+    grain: str
+    current_range_start: dt.date
+    current_range_end: dt.date
+    baseline_range_start: dt.date
+    baseline_range_end: dt.date
+    current_value: float | None = None
+    baseline_value: float | None = None
+    delta_value: float | None = None
+    delta_pct: float | None = None
+    error: str | None = None
+
+
+class AnalyticsAiQueryResponse(BaseModel):
+    answer: str
+    metrics_used: list[str]
+    filters_applied: dict
+    next_step_tasks: list[str]
+    evidence: list[AnalyticsAiEvidenceMetric] = Field(default_factory=list)
+
+
+class AnalyticsAiAuditLogRead(BaseModel):
+    id: str
+    organization_id: str
+    membership_id: str
+    user_id: str
+    report_key: str | None = None
+    conversation_id: str
+    message_id: str
+    user_prompt: str
+    intent: str
+    rationale: str
+    metrics_used: list[str]
+    filters_applied: dict
+    query_requests: list[dict]
+    query_responses_summary: dict
+    created_at: dt.datetime
+
+
+_REPORT_CATEGORY_BY_KEY: dict[str, str] = {
+    "executive_overview": "executive",
+    "exec_overview": "executive",
+    "revenue_cycle": "revenue",
+    "clinical_delivery": "clinical",
+    "compliance_risk": "compliance",
+    "chart_audit": "compliance",
+}
+
+_REPORT_CATEGORY_TO_METRIC_CATEGORIES: dict[str, set[str]] = {
+    "revenue": {"financial"},
+    "clinical": {"operations"},
+    "compliance": {"compliance"},
+}
+
+_DEFAULT_METRICS_BY_REPORT_KEY: dict[str, list[str]] = {
+    "chart_audit": ["unsigned_notes_over_24h", "unsigned_notes_over_72h", "active_clients", "encounters_week"],
+    "executive_overview": [
+        "active_clients",
+        "encounters_week",
+        "charges_week",
+        "claims_paid_week",
+        "denial_rate_week",
+        "unsigned_notes_over_72h",
+    ],
+    "exec_overview": [
+        "active_clients",
+        "encounters_week",
+        "charges_week",
+        "claims_paid_week",
+        "denial_rate_week",
+        "unsigned_notes_over_72h",
+    ],
+    "revenue_cycle": [
+        "charges_week",
+        "claims_submitted_week",
+        "claims_paid_week",
+        "denial_rate_week",
+        "ar_balance_total",
+        "ar_over_30",
+    ],
+    "clinical_delivery": [
+        "encounters_week",
+        "active_clients",
+        "attendance_rate_week",
+        "no_show_rate_week",
+        "new_admissions_week",
+        "discharges_week",
+    ],
+    "compliance_risk": ["unsigned_notes_over_24h", "unsigned_notes_over_72h", "active_clients", "denial_rate_week"],
+}
+
+_KEYWORD_METRIC_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(census|active)", re.IGNORECASE), "active_clients"),
+    (re.compile(r"encounter", re.IGNORECASE), "encounters_week"),
+    (re.compile(r"charge", re.IGNORECASE), "charges_week"),
+    (re.compile(r"(paid|payment)", re.IGNORECASE), "claims_paid_week"),
+    (re.compile(r"submit", re.IGNORECASE), "claims_submitted_week"),
+    (re.compile(r"denial", re.IGNORECASE), "denial_rate_week"),
+    (re.compile(r"(accounts receivable|\\bar\\b)", re.IGNORECASE), "ar_balance_total"),
+    (re.compile(r"unsigned", re.IGNORECASE), "unsigned_notes_over_72h"),
+    (re.compile(r"admission", re.IGNORECASE), "new_admissions_week"),
+    (re.compile(r"discharge", re.IGNORECASE), "discharges_week"),
+    (re.compile(r"no\\s*show", re.IGNORECASE), "no_show_rate_week"),
+    (re.compile(r"attendance", re.IGNORECASE), "attendance_rate_week"),
+)
+
+
+def _normalize_report_key(report_key: str | None) -> str | None:
+    normalized = (report_key or "").strip().lower()
+    return normalized or None
+
+
+def _report_category(report_key: str | None) -> str | None:
+    normalized = _normalize_report_key(report_key)
+    if not normalized:
+        return None
+    return _REPORT_CATEGORY_BY_KEY.get(normalized)
+
+
+def _is_rate_metric_key(metric_key: str) -> bool:
+    return "rate" in metric_key.lower()
+
+
+def _is_currency_metric_key(metric_key: str) -> bool:
+    key = metric_key.lower()
+    return "charge" in key or "paid" in key or key.startswith("ar_") or "ar_balance" in key
+
+
+def _title_case_from_key(key: str) -> str:
+    return " ".join(part.capitalize() for part in key.split("_") if part)
+
+
+def _format_metric_value(metric_key: str, value: float | None) -> str:
+    if value is None:
+        return "-"
+    if _is_rate_metric_key(metric_key):
+        ratio = value * 100 if value <= 1 else value
+        return f"{ratio:.1f}%"
+    if _is_currency_metric_key(metric_key):
+        return f"${value:,.0f}"
+    if abs(value - round(value)) < 0.0001:
+        return f"{value:,.0f}"
+    return f"{value:,.2f}"
+
+
+def _rows_in_window(rows: list[AnalyticsQueryRow], start: dt.date, end: dt.date) -> list[AnalyticsQueryRow]:
+    filtered: list[AnalyticsQueryRow] = []
+    for row in rows:
+        candidate: dt.date | None = None
+        if row.kpi_date is not None:
+            candidate = row.kpi_date
+        elif row.as_of_ts is not None:
+            candidate = row.as_of_ts.date()
+        if candidate is None:
+            continue
+        if start <= candidate <= end:
+            filtered.append(row)
+    return filtered
+
+
+def _aggregate(metric_key: str, rows: list[AnalyticsQueryRow]) -> float | None:
+    values = [
+        float(row.value_num)
+        for row in rows
+        if row.value_num is not None and not isinstance(row.value_num, bool)
+    ]
+    if not values:
+        return None
+    if _is_rate_metric_key(metric_key):
+        return sum(values) / float(len(values))
+    return sum(values)
+
+
+def _latest(rows: list[AnalyticsQueryRow]) -> float | None:
+    values = [
+        float(row.value_num)
+        for row in rows
+        if row.value_num is not None and not isinstance(row.value_num, bool)
+    ]
+    if not values:
+        return None
+    return values[-1]
+
+
+def _default_current_window(today: dt.date) -> tuple[dt.date, dt.date]:
+    start = today - dt.timedelta(days=today.weekday())
+    return start, today
+
+
+def _baseline_window(current_start: dt.date, current_end: dt.date) -> tuple[dt.date, dt.date]:
+    window_days = (current_end - current_start).days + 1
+    baseline_end = current_start - dt.timedelta(days=1)
+    baseline_start = baseline_end - dt.timedelta(days=window_days - 1)
+    return baseline_start, baseline_end
+
+
+def _select_metric_keys(
+    *,
+    prompt: str,
+    report_key: str | None,
+    allowed_metrics: list[AnalyticsMetricRead],
+) -> list[str]:
+    normalized_prompt = prompt.strip().lower()
+    if not normalized_prompt:
+        return []
+
+    candidate_metrics = allowed_metrics
+    report_category = _report_category(report_key)
+    if report_category in _REPORT_CATEGORY_TO_METRIC_CATEGORIES:
+        allowed_categories = _REPORT_CATEGORY_TO_METRIC_CATEGORIES[report_category]
+        candidate_metrics = [row for row in allowed_metrics if (row.category or "").strip().lower() in allowed_categories]
+
+    available_keys = {row.metric_key for row in candidate_metrics}
+
+    selected: list[str] = []
+
+    # Direct metric_key mention.
+    for key in sorted(available_keys, key=len, reverse=True):
+        if key.lower() in normalized_prompt:
+            selected.append(key)
+
+    # Keyword-to-metric mapping.
+    for pattern, metric_key in _KEYWORD_METRIC_RULES:
+        if pattern.search(normalized_prompt) and metric_key in available_keys:
+            selected.append(metric_key)
+
+    report_defaults = _DEFAULT_METRICS_BY_REPORT_KEY.get(_normalize_report_key(report_key) or "", [])
+    defaults = [key for key in report_defaults if key in available_keys]
+
+    deduped = list(dict.fromkeys([item.strip().lower() for item in selected if item.strip()]))
+    if not deduped:
+        deduped = defaults
+    if not deduped:
+        deduped = sorted(list(available_keys))[:6]
+
+    return deduped[:8]
+
+
+def _intent_from_prompt(prompt: str) -> str:
+    lowered = prompt.strip().lower()
+    if any(token in lowered for token in ["why", "root cause", "drivers"]):
+        return "root_cause"
+    if any(token in lowered for token in ["trend", "over time", "change", "week", "month"]):
+        return "trend"
+    if any(token in lowered for token in ["risk", "compliance", "audit", "unsigned"]):
+        return "risk"
+    if any(token in lowered for token in ["revenue", "denial", "ar", "paid", "payment", "charge"]):
+        return "revenue"
+    return "dashboard_question"
+
+
+def _next_steps_for_metric(metric_key: str) -> list[str]:
+    key = metric_key.lower()
+    if "denial_rate" in key:
+        return [
+            "Review denied claims for trends by payer and service date; confirm top denial reasons.",
+            "Validate eligibility and authorization checks for the cohort driving the change.",
+        ]
+    if key.startswith("ar_") or "ar_balance" in key:
+        return [
+            "Drill into A/R aging buckets and identify top balances over 30/60/90 days.",
+            "Confirm submission cadence and investigate stalled claims with no recent payer activity.",
+        ]
+    if "unsigned" in key:
+        return [
+            "Route unsigned documentation to responsible staff and monitor SLA compliance (24h/72h).",
+            "Slice by facility/program/provider to identify the backlog drivers and assign owners.",
+        ]
+    if "encounter" in key:
+        return [
+            "Review scheduling and staffing coverage for the largest swing days in the period.",
+            "Slice by facility/program/provider to identify where throughput shifted.",
+        ]
+    if "attendance" in key or "no_show" in key:
+        return [
+            "Review reminder and outreach workflows for high no-show cohorts; confirm transportation/escalation steps.",
+            "Slice by facility/program to identify operational bottlenecks affecting attendance.",
+        ]
+    if "active_clients" in key or "census" in key:
+        return [
+            "Validate admissions/discharges drivers behind census changes; review referral pipeline if needed.",
+        ]
+    return [
+        "Validate metric movement by slicing facility/program/provider, then confirm an owner for follow-up actions.",
+    ]
+
+
+def _suggest_missing_metric_key(prompt: str) -> str:
+    lowered = prompt.strip().lower()
+    tokens = re.findall(r"[a-z0-9]+", lowered)[:6]
+    if not tokens:
+        return "new_metric_key"
+    candidate = "_".join(tokens)
+    candidate = re.sub(r"_{2,}", "_", candidate).strip("_")
+    return (candidate[:80] or "new_metric_key").lower()
+
+
+@router.post("/ai/query", response_model=AnalyticsAiQueryResponse)
+def analytics_ai_query(
+    payload: AnalyticsAiQueryRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    membership: OrganizationMembership = Depends(get_current_membership),
+    _: None = Depends(require_permission("analytics:view")),
+) -> AnalyticsAiQueryResponse:
+    prompt = payload.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="prompt is required")
+
+    report_key = _normalize_report_key(payload.report_key)
+    today = dt.datetime.now(dt.UTC).date()
+    default_start, default_end = _default_current_window(today)
+
+    filters = payload.filters or AnalyticsAiFilters()
+    current_start = filters.start or default_start
+    current_end = filters.end or default_end
+    if current_start > current_end:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="filters.start cannot be after filters.end")
+
+    baseline_start, baseline_end = _baseline_window(current_start, current_end)
+    query_start = baseline_start
+    query_end = current_end
+
+    allowed_metrics = list_analytics_metrics(db=db, membership=membership, _=None)
+    metrics_used = _select_metric_keys(prompt=prompt, report_key=report_key, allowed_metrics=allowed_metrics)
+
+    filters_applied: dict = {
+        "start": current_start.isoformat(),
+        "end": current_end.isoformat(),
+        "facility_id": (filters.facility_id or None),
+        "program_id": (filters.program_id or None),
+        "provider_id": (filters.provider_id or None),
+        "payer_id": (filters.payer_id or None),
+    }
+
+    query_requests: list[dict] = []
+    evidence: list[AnalyticsAiEvidenceMetric] = []
+
+    if metrics_used:
+        for metric_key in metrics_used:
+            query_requests.append(
+                {
+                    "metric_key": metric_key,
+                    "start": query_start.isoformat(),
+                    "end": query_end.isoformat(),
+                    "facility_id": filters.facility_id,
+                    "program_id": filters.program_id,
+                    "provider_id": filters.provider_id,
+                    "payer_id": filters.payer_id,
+                }
+            )
+
+            try:
+                metric_payload = query_analytics_metric(
+                    request=request,
+                    metric_key=metric_key,
+                    start=query_start,
+                    end=query_end,
+                    facility_id=filters.facility_id,
+                    program_id=filters.program_id,
+                    provider_id=filters.provider_id,
+                    payer_id=filters.payer_id,
+                    db=db,
+                    membership=membership,
+                    _=None,
+                )
+
+                current_rows = _rows_in_window(metric_payload.rows, current_start, current_end)
+                baseline_rows = _rows_in_window(metric_payload.rows, baseline_start, baseline_end)
+
+                is_snapshot = metric_payload.grain == _SNAPSHOT_GRAIN
+                current_value = _latest(current_rows) if is_snapshot else _aggregate(metric_key, current_rows)
+                baseline_value = _latest(baseline_rows) if is_snapshot else _aggregate(metric_key, baseline_rows)
+
+                delta_value = None
+                delta_pct = None
+                if current_value is not None and baseline_value is not None:
+                    delta_value = current_value - baseline_value
+                    if baseline_value != 0:
+                        delta_pct = (delta_value / abs(baseline_value)) * 100.0
+
+                evidence.append(
+                    AnalyticsAiEvidenceMetric(
+                        metric_key=metric_key,
+                        label=_title_case_from_key(metric_key),
+                        grain=metric_payload.grain,
+                        current_range_start=current_start,
+                        current_range_end=current_end,
+                        baseline_range_start=baseline_start,
+                        baseline_range_end=baseline_end,
+                        current_value=current_value,
+                        baseline_value=baseline_value,
+                        delta_value=delta_value,
+                        delta_pct=delta_pct,
+                        error=None,
+                    )
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                logger.exception("analytics.ai metric query failed metric_key=%s report_key=%s", metric_key, report_key)
+                evidence.append(
+                    AnalyticsAiEvidenceMetric(
+                        metric_key=metric_key,
+                        label=_title_case_from_key(metric_key),
+                        grain="unknown",
+                        current_range_start=current_start,
+                        current_range_end=current_end,
+                        baseline_range_start=baseline_start,
+                        baseline_range_end=baseline_end,
+                        current_value=None,
+                        baseline_value=None,
+                        delta_value=None,
+                        delta_pct=None,
+                        error=str(exc),
+                    )
+                )
+
+    next_steps: list[str] = []
+    for metric_key in metrics_used:
+        for item in _next_steps_for_metric(metric_key):
+            if item not in next_steps:
+                next_steps.append(item)
+            if len(next_steps) >= 6:
+                break
+        if len(next_steps) >= 6:
+            break
+
+    intent = _intent_from_prompt(prompt)
+    rationale_parts: list[str] = []
+    if report_key:
+        rationale_parts.append(f"Report context: {report_key}")
+        report_category = _report_category(report_key)
+        if report_category:
+            rationale_parts.append(f"Report category: {report_category}")
+    if metrics_used:
+        rationale_parts.append(f"Selected metrics: {', '.join(metrics_used)}")
+    rationale_parts.append(f"Filters: {filters_applied}")
+    rationale = "; ".join(rationale_parts)
+
+    if not metrics_used:
+        suggested_metric = _suggest_missing_metric_key(prompt)
+        answer = (
+            "I cannot answer that question with the currently registered analytics metrics.\n\n"
+            f"Suggested backlog metric_key to add: `{suggested_metric}`.\n"
+            "Once that metric is added to the analytics catalog and backed by a KPI table, EI can answer this."
+        )
+    else:
+        lines: list[str] = []
+        lines.append(
+            f"Time window: {current_start.isoformat()} to {current_end.isoformat()} "
+            f"(baseline: {baseline_start.isoformat()} to {baseline_end.isoformat()})."
+        )
+        for item in evidence:
+            if item.error:
+                lines.append(f"- {item.label}: unavailable ({item.error})")
+                continue
+            current_label = _format_metric_value(item.metric_key, item.current_value)
+            baseline_label = _format_metric_value(item.metric_key, item.baseline_value)
+            delta_pct = item.delta_pct
+            delta_label = ""
+            if isinstance(delta_pct, float):
+                sign = "+" if delta_pct >= 0 else "-"
+                delta_label = f" ({sign}{abs(delta_pct):.1f}% vs baseline)"
+            lines.append(f"- {item.label}: {current_label} (baseline {baseline_label}){delta_label}")
+
+        answer = "\n".join(lines)
+
+    # Persist an audit record for full traceability (no row-level KPI data).
+    tenant_id = _uuid_string_or_400(membership.organization_id, field_name="organization_id")
+    audit_row = AnalyticsAiAuditLog(
+        organization_id=tenant_id,
+        membership_id=_uuid_string_or_400(membership.id, field_name="membership_id"),
+        user_id=_uuid_string_or_400(membership.user_id, field_name="user_id"),
+        report_key=report_key,
+        conversation_id=str(uuid4()),
+        message_id=str(uuid4()),
+        user_prompt=prompt,
+        intent=intent,
+        rationale=rationale,
+        metrics_used=metrics_used,
+        filters_applied=filters_applied,
+        query_requests=query_requests,
+        query_responses_summary={
+            # Ensure JSON-serializable payloads for Postgres JSONB / SQLite JSON.
+            "evidence": [row.model_dump(mode="json", exclude_none=True) for row in evidence],
+            "window": {
+                "current_start": current_start.isoformat(),
+                "current_end": current_end.isoformat(),
+                "baseline_start": baseline_start.isoformat(),
+                "baseline_end": baseline_end.isoformat(),
+            },
+        },
+    )
+    db.add(audit_row)
+    db.commit()
+    db.refresh(audit_row)
+
+    log_event(
+        db,
+        action="analytics.ai_query",
+        entity_type="analytics_ai",
+        entity_id=audit_row.id,
+        organization_id=tenant_id,
+        actor=membership.user.email,
+        metadata={
+            "org_id": tenant_id,
+            "user_id": membership.user_id,
+            "membership_id": membership.id,
+            "report_key": report_key,
+            "intent": intent,
+            "metrics_used": metrics_used,
+            "filters_applied": filters_applied,
+        },
+    )
+
+    return AnalyticsAiQueryResponse(
+        answer=answer,
+        metrics_used=metrics_used,
+        filters_applied=filters_applied,
+        next_step_tasks=next_steps,
+        evidence=evidence,
+    )
+
+
+def _audit_log_read(row: AnalyticsAiAuditLog) -> AnalyticsAiAuditLogRead:
+    return AnalyticsAiAuditLogRead(
+        id=row.id,
+        organization_id=row.organization_id,
+        membership_id=row.membership_id,
+        user_id=row.user_id,
+        report_key=row.report_key,
+        conversation_id=row.conversation_id,
+        message_id=row.message_id,
+        user_prompt=row.user_prompt,
+        intent=row.intent,
+        rationale=row.rationale,
+        metrics_used=[str(item) for item in (row.metrics_used or [])],
+        filters_applied=row.filters_applied or {},
+        query_requests=[dict(item) for item in (row.query_requests or [])],
+        query_responses_summary=row.query_responses_summary or {},
+        created_at=row.created_at,
+    )
+
+
+@router.get("/ai/audit", response_model=list[AnalyticsAiAuditLogRead])
+def list_analytics_ai_audit_logs(
+    report_key: str | None = Query(default=None),
+    since: dt.datetime | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    conversation_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    membership: OrganizationMembership = Depends(get_current_membership),
+    _: None = Depends(require_permission("analytics:view")),
+) -> list[AnalyticsAiAuditLogRead]:
+    tenant_id = _uuid_string_or_400(membership.organization_id, field_name="organization_id")
+    query = select(AnalyticsAiAuditLog).where(AnalyticsAiAuditLog.organization_id == tenant_id)
+
+    if report_key and report_key.strip():
+        query = query.where(AnalyticsAiAuditLog.report_key == report_key.strip().lower())
+    if since:
+        query = query.where(AnalyticsAiAuditLog.created_at >= since)
+    if conversation_id and conversation_id.strip():
+        convo = _uuid_string_or_400(conversation_id.strip(), field_name="conversation_id")
+        query = query.where(AnalyticsAiAuditLog.conversation_id == convo)
+
+    rows = (
+        db.execute(query.order_by(AnalyticsAiAuditLog.created_at.desc()).limit(limit))
+        .scalars()
+        .all()
+    )
+    return [_audit_log_read(row) for row in rows]

@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import AnalyticsErrorBoundary from "@/components/analytics/AnalyticsErrorBoundary";
 import AlertsStrip from "@/components/analytics/AlertsStrip";
@@ -66,8 +67,24 @@ function categoryBadgeClass(category: ReportCategory): string {
   }
 }
 
+function formatDateYmd(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function startOfWeekMonday(date: Date): Date {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dayOfWeek = d.getDay();
+  const daysSinceMonday = (dayOfWeek + 6) % 7;
+  d.setDate(d.getDate() - daysSinceMonday);
+  return d;
+}
+
 export default function AnalyticsReportShell({ reportKey }: AnalyticsReportShellProps) {
   const normalizedKey = reportKey.trim().toLowerCase();
+  const searchParams = useSearchParams();
 
   const [me, setMe] = useState<MeResponse | null>(null);
   const [reports, setReports] = useState<ReportListItem[]>([]);
@@ -76,6 +93,16 @@ export default function AnalyticsReportShell({ reportKey }: AnalyticsReportShell
   const [eiOpen, setEiOpen] = useState(false);
   const [selectedAlert, setSelectedAlert] = useState<AnalyticsAlertRead | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const didAutoOpenEiRef = useRef(false);
+
+  const defaultEiFilters = useMemo(() => {
+    const today = new Date();
+    const start = startOfWeekMonday(today);
+    return {
+      start: formatDateYmd(start),
+      end: formatDateYmd(today),
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -106,6 +133,16 @@ export default function AnalyticsReportShell({ reportKey }: AnalyticsReportShell
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (didAutoOpenEiRef.current) return;
+    if (!searchParams) return;
+    if (searchParams.get("ei") !== "1") return;
+
+    didAutoOpenEiRef.current = true;
+    setSelectedAlert(null);
+    setEiOpen(true);
+  }, [searchParams]);
 
   const role = (me?.role ?? "").trim().toLowerCase() as UserRoleKey;
   const allowed = isReportAllowedForRole(normalizedKey, role);
@@ -233,6 +270,24 @@ export default function AnalyticsReportShell({ reportKey }: AnalyticsReportShell
 
             <AnalyticsErrorBoundary resetKey={embedKey}>
               <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-3 flex flex-col items-start justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 md:flex-row md:items-center">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Ask EI</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Ask about this dashboard using governed metrics and an audited query trail.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setSelectedAlert(null);
+                      setEiOpen(true);
+                    }}
+                  >
+                    Ask about this dashboard
+                  </Button>
+                </div>
                 <AnalyticsEmbed reportKey={normalizedKey} key={embedKey} />
               </div>
             </AnalyticsErrorBoundary>
@@ -249,6 +304,7 @@ export default function AnalyticsReportShell({ reportKey }: AnalyticsReportShell
         reportKey={normalizedKey}
         reportTitle={reportTitle}
         initialAlert={selectedAlert}
+        defaultFilters={defaultEiFilters}
       />
     </section>
   );

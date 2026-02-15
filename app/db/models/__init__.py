@@ -3,6 +3,7 @@ from app.db import sqlite_compat  # noqa: F401
 
 # Import models here so SQLAlchemy registers them with Base.metadata
 from app.db.models.audit_event import AuditEvent  # noqa: F401
+from app.db.models.analytics_ai_audit_log import AnalyticsAiAuditLog  # noqa: F401
 from app.db.models.analytics_alert import AnalyticsAlert  # noqa: F401
 from app.db.models.analytics_metric import AnalyticsMetric  # noqa: F401
 from app.db.models.bi_report import BIReport  # noqa: F401

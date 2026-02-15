@@ -1,20 +1,21 @@
 "use client";
 
-import { Loader2, Send, X } from "lucide-react";
+import { Clipboard, Loader2, Send, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   acknowledgeAnalyticsAlert,
+  fetchAnalyticsAiAudit,
   fetchAnalyticsAlerts,
-  fetchAnalyticsMetrics,
-  queryAnalyticsMetric,
+  queryAnalyticsAi,
   resolveAnalyticsAlert,
   type AnalyticsAlertRead,
-  type AnalyticsMetricRead,
-  type AnalyticsQueryRow,
+  type AnalyticsAiAuditLogRead,
+  type AnalyticsAiEvidenceMetric,
+  type AnalyticsAiFilters,
 } from "@/lib/analytics/api";
-import { defaultKpisForReport } from "@/lib/analytics/catalog";
 
 type EiPanelProps = {
   open: boolean;
@@ -22,15 +23,7 @@ type EiPanelProps = {
   reportKey: string;
   reportTitle: string;
   initialAlert?: AnalyticsAlertRead | null;
-};
-
-type EiFilters = {
-  start: string;
-  end: string;
-  facility_id?: string;
-  program_id?: string;
-  provider_id?: string;
-  payer_id?: string;
+  defaultFilters?: AnalyticsAiFilters;
 };
 
 type EiMessage =
@@ -44,14 +37,16 @@ type EiMessage =
     id: string;
     role: "ei";
     status: "loading" | "done" | "error";
-    content: string;
+    answer: string;
     createdAt: number;
-    metricKeysUsed: string[];
-    filters: EiFilters | null;
-    suggestedNextActions: string[];
+    metricsUsed: string[];
+    filtersApplied: Record<string, unknown> | null;
+    nextStepTasks: string[];
+    evidence: AnalyticsAiEvidenceMetric[];
   };
 
 type AlertStatusFilter = "open" | "acknowledged" | "resolved";
+type EiTab = "ask" | "audit";
 
 function formatDateYmd(date: Date): string {
   const year = date.getFullYear();
@@ -68,20 +63,6 @@ function startOfWeekMonday(date: Date): Date {
   return d;
 }
 
-function addDays(date: Date, days: number): Date {
-  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  d.setDate(d.getDate() + days);
-  return d;
-}
-
-function titleCaseFromKey(key: string): string {
-  return key
-    .split("_")
-    .filter(Boolean)
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join(" ");
-}
-
 function isRateMetric(metricKey: string): boolean {
   return metricKey.toLowerCase().includes("rate");
 }
@@ -95,110 +76,6 @@ function formatMetricValue(metricKey: string, value: number | null): string {
     return `${ratio.toFixed(1)}%`;
   }
   return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
-
-function numericValues(rows: AnalyticsQueryRow[]): number[] {
-  return rows
-    .map((row) => row.value_num)
-    .filter((value): value is number => typeof value === "number" && !Number.isNaN(value));
-}
-
-function aggregate(metricKey: string, rows: AnalyticsQueryRow[]): number | null {
-  const values = numericValues(rows);
-  if (values.length === 0) return null;
-  if (isRateMetric(metricKey)) {
-    const sum = values.reduce((acc, value) => acc + value, 0);
-    return sum / values.length;
-  }
-  return values.reduce((acc, value) => acc + value, 0);
-}
-
-function rowsInWindow(rows: AnalyticsQueryRow[], start: Date, end: Date): AnalyticsQueryRow[] {
-  const startMs = start.getTime();
-  const endMs = end.getTime();
-  return rows.filter((row) => {
-    const raw = row.kpi_date ?? row.as_of_ts;
-    if (!raw) return false;
-    const parsed = new Date(raw);
-    const candidate = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()).getTime();
-    return candidate >= startMs && candidate <= endMs;
-  });
-}
-
-function selectMetricKeys(
-  question: string,
-  availableKeys: Set<string>,
-  defaults: string[],
-): string[] {
-  const normalized = question.toLowerCase();
-  const selected: string[] = [];
-
-  // Direct metric_key mention.
-  for (const key of availableKeys) {
-    if (normalized.includes(key.toLowerCase())) {
-      selected.push(key);
-    }
-  }
-
-  const keywordMap: Array<{ test: RegExp; metric: string }> = [
-    { test: /(census|active)/, metric: "active_clients" },
-    { test: /encounter/, metric: "encounters_week" },
-    { test: /charge/, metric: "charges_week" },
-    { test: /(paid|payment)/, metric: "claims_paid_week" },
-    { test: /submit/, metric: "claims_submitted_week" },
-    { test: /denial/, metric: "denial_rate_week" },
-    { test: /(accounts receivable|\\bar\\b)/, metric: "ar_balance_total" },
-    { test: /unsigned/, metric: "unsigned_notes_over_72h" },
-    { test: /admission/, metric: "new_admissions_week" },
-    { test: /discharge/, metric: "discharges_week" },
-    { test: /no\\s*show/, metric: "no_show_rate_week" },
-    { test: /attendance/, metric: "attendance_rate_week" },
-  ];
-
-  for (const mapping of keywordMap) {
-    if (mapping.test.test(normalized) && availableKeys.has(mapping.metric)) {
-      selected.push(mapping.metric);
-    }
-  }
-
-  const deduped = Array.from(new Set(selected.map((item) => item.trim()).filter(Boolean)));
-  const fallback = defaults.filter((item) => availableKeys.has(item));
-  return (deduped.length > 0 ? deduped : fallback).slice(0, 3);
-}
-
-function suggestedActionsForMetric(metricKey: string): string[] {
-  const key = metricKey.toLowerCase();
-  if (key.includes("denial_rate")) {
-    return [
-      "Review denied claims for trends by payer and service date.",
-      "Validate eligibility and authorization checks for the top denial cohort.",
-    ];
-  }
-  if (key.startsWith("ar_") || key.includes("ar_balance")) {
-    return [
-      "Prioritize follow-up on aging AR buckets and confirm submission cadence.",
-      "Validate payment posting timelines and investigate stalled claims.",
-    ];
-  }
-  if (key.includes("unsigned")) {
-    return [
-      "Route unsigned documentation to responsible staff and monitor SLA compliance.",
-      "Confirm escalation rules for notes exceeding 72 hours.",
-    ];
-  }
-  if (key.includes("encounters")) {
-    return [
-      "Cross-check scheduling and staffing coverage for low-volume days.",
-      "Investigate drivers behind week-over-week encounter shifts.",
-    ];
-  }
-  if (key.includes("attendance") || key.includes("no_show")) {
-    return [
-      "Review appointment reminders and outreach workflow for high no-show cohorts.",
-      "Validate transportation and access barriers by facility/program.",
-    ];
-  }
-  return ["Validate metric movement by slicing facility and program, then determine owners for next actions."];
 }
 
 function severityBadgeClass(severity: string): string {
@@ -224,15 +101,54 @@ function formatDeltaPct(value?: number | null): string {
   return `${sign}${Math.abs(value).toFixed(1)}%`;
 }
 
-export default function EiPanel({ open, onClose, reportKey, reportTitle, initialAlert }: EiPanelProps) {
-  const [metrics, setMetrics] = useState<AnalyticsMetricRead[] | null>(null);
-  const [metricsError, setMetricsError] = useState<string | null>(null);
+function formatAuditTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString();
+}
+
+function extractDateRange(filters: Record<string, unknown> | null | undefined): string | null {
+  if (!filters) return null;
+  const start = typeof filters.start === "string" ? filters.start : null;
+  const end = typeof filters.end === "string" ? filters.end : null;
+  if (!start && !end) return null;
+  if (start && end) return `${start} to ${end}`;
+  return start ?? end;
+}
+
+function renderFilters(filters: Record<string, unknown> | null | undefined): string {
+  if (!filters) return "none";
+  const range = extractDateRange(filters);
+  const facility = typeof filters.facility_id === "string" ? filters.facility_id : null;
+  const program = typeof filters.program_id === "string" ? filters.program_id : null;
+  const provider = typeof filters.provider_id === "string" ? filters.provider_id : null;
+  const payer = typeof filters.payer_id === "string" ? filters.payer_id : null;
+
+  const parts = [
+    range ? `date=${range}` : null,
+    facility ? `facility=${facility}` : null,
+    program ? `program=${program}` : null,
+    provider ? `provider=${provider}` : null,
+    payer ? `payer=${payer}` : null,
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join("  ") : "none";
+}
+
+export default function EiPanel({ open, onClose, reportKey, reportTitle, initialAlert, defaultFilters }: EiPanelProps) {
   const [alerts, setAlerts] = useState<AnalyticsAlertRead[]>([]);
   const [alertsError, setAlertsError] = useState<string | null>(null);
   const [alertsStatus, setAlertsStatus] = useState<AlertStatusFilter>("open");
   const [alertsWindow, setAlertsWindow] = useState<"all" | 7 | 30 | 90>("all");
   const [alertsLoading, setAlertsLoading] = useState(false);
   const [alertActionBusyId, setAlertActionBusyId] = useState<string | null>(null);
+  const [tab, setTab] = useState<EiTab>("ask");
+
+  const [auditRows, setAuditRows] = useState<AnalyticsAiAuditLogRead[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [copiedAuditId, setCopiedAuditId] = useState<string | null>(null);
+  const [auditRefreshNonce, setAuditRefreshNonce] = useState(0);
   const [messages, setMessages] = useState<EiMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -240,8 +156,16 @@ export default function EiPanel({ open, onClose, reportKey, reportTitle, initial
   const chatRef = useRef<HTMLDivElement | null>(null);
   const lastInjectedAlertRef = useRef<string | null>(null);
 
-  const availableMetricKeys = useMemo(() => new Set((metrics ?? []).map((row) => row.metric_key)), [metrics]);
-  const defaultKpis = useMemo(() => defaultKpisForReport(reportKey), [reportKey]);
+  const filters = useMemo<AnalyticsAiFilters>(() => {
+    if (defaultFilters?.start && defaultFilters?.end) return defaultFilters;
+
+    const today = new Date();
+    const weekStart = startOfWeekMonday(today);
+    return {
+      start: formatDateYmd(weekStart),
+      end: formatDateYmd(today),
+    };
+  }, [defaultFilters]);
 
   function injectAlertContext(alert: AnalyticsAlertRead) {
     const now = Date.now();
@@ -260,14 +184,15 @@ export default function EiPanel({ open, onClose, reportKey, reportTitle, initial
       id: `ei-alert-${now}`,
       role: "ei",
       status: "done",
-      content: contentLines.join("\n"),
+      answer: contentLines.join("\n"),
       createdAt: now,
-      metricKeysUsed: metricKey ? [metricKey] : [],
-      filters: {
+      metricsUsed: metricKey ? [metricKey] : [],
+      filtersApplied: {
         start: alert.current_range_start,
         end: alert.current_range_end,
       },
-      suggestedNextActions: alert.recommended_actions ?? [],
+      nextStepTasks: alert.recommended_actions ?? [],
+      evidence: [],
     };
 
     setMessages((current) => [...current, eiMessage]);
@@ -281,27 +206,10 @@ export default function EiPanel({ open, onClose, reportKey, reportTitle, initial
   useEffect(() => {
     if (!open) {
       lastInjectedAlertRef.current = null;
+      setCopiedAuditId(null);
       return;
     }
-    let isMounted = true;
-
-    async function loadMetrics() {
-      setMetricsError(null);
-      try {
-        const rows = await fetchAnalyticsMetrics();
-        if (!isMounted) return;
-        setMetrics(rows);
-      } catch (error) {
-        if (!isMounted) return;
-        setMetricsError(error instanceof Error ? error.message : "Unable to load analytics metrics.");
-        setMetrics([]);
-      }
-    }
-
-    void loadMetrics();
-    return () => {
-      isMounted = false;
-    };
+    setTab("ask");
   }, [open]);
 
   useEffect(() => {
@@ -340,10 +248,38 @@ export default function EiPanel({ open, onClose, reportKey, reportTitle, initial
 
   useEffect(() => {
     if (!open) return;
+    if (tab !== "ask") return;
     const node = chatRef.current;
     if (!node) return;
     node.scrollTop = node.scrollHeight;
-  }, [messages, open]);
+  }, [messages, open, tab]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (tab !== "audit") return;
+    let isMounted = true;
+
+    async function loadAudit() {
+      setAuditLoading(true);
+      setAuditError(null);
+      try {
+        const rows = await fetchAnalyticsAiAudit({ report_key: reportKey, limit: 25 });
+        if (!isMounted) return;
+        setAuditRows(rows);
+      } catch (error) {
+        if (!isMounted) return;
+        setAuditError(error instanceof Error ? error.message : "Unable to load audit logs.");
+        setAuditRows([]);
+      } finally {
+        if (isMounted) setAuditLoading(false);
+      }
+    }
+
+    void loadAudit();
+    return () => {
+      isMounted = false;
+    };
+  }, [auditRefreshNonce, open, reportKey, tab]);
 
   async function sendMessage(text: string) {
     const trimmed = text.trim();
@@ -361,76 +297,31 @@ export default function EiPanel({ open, onClose, reportKey, reportTitle, initial
       id: `ei-${now}`,
       role: "ei",
       status: "loading",
-      content: "Analyzing metrics...",
+      answer: "Analyzing metrics...",
       createdAt: now + 1,
-      metricKeysUsed: [],
-      filters: null,
-      suggestedNextActions: [],
+      metricsUsed: [],
+      filtersApplied: null,
+      nextStepTasks: [],
+      evidence: [],
     };
 
     setMessages((current) => [...current, userMessage, placeholder]);
     setDraft("");
     setIsSending(true);
 
-    const today = new Date();
-    const currentStart = startOfWeekMonday(today);
-    const currentEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const windowDays = Math.max(1, Math.round((currentEnd.getTime() - currentStart.getTime()) / 86400000) + 1);
-    const previousStart = addDays(currentStart, -7);
-
-    const queryStart = formatDateYmd(previousStart);
-    const queryEnd = formatDateYmd(currentEnd);
-
-    const metricKeys = selectMetricKeys(trimmed, availableMetricKeys, defaultKpis);
-
     try {
-      const payloads = await Promise.all(
-        metricKeys.map((metricKey) =>
-          queryAnalyticsMetric(metricKey, { start: queryStart, end: queryEnd }),
-        ),
-      );
-
-      const lines: string[] = [];
-      const nextActions = new Set<string>();
-
-      for (let index = 0; index < payloads.length; index += 1) {
-        const metricKey = metricKeys[index];
-        const payload = payloads[index];
-        const currentRows = rowsInWindow(payload.rows, currentStart, currentEnd);
-        const previousEnd = addDays(previousStart, windowDays - 1);
-        const previousRows = rowsInWindow(payload.rows, previousStart, previousEnd);
-
-        const currentValue = aggregate(metricKey, currentRows);
-        const previousValue = aggregate(metricKey, previousRows);
-
-        let deltaText = "";
-        if (previousValue !== null && previousValue !== 0 && currentValue !== null) {
-          const deltaPct = (currentValue - previousValue) / Math.abs(previousValue);
-          deltaText = ` (${deltaPct >= 0 ? "+" : "-"}${Math.abs(deltaPct * 100).toFixed(1)}% vs prior week)`;
-        }
-
-        lines.push(`${titleCaseFromKey(metricKey)}: ${formatMetricValue(metricKey, currentValue)}${deltaText}`);
-        for (const action of suggestedActionsForMetric(metricKey)) {
-          nextActions.add(action);
-        }
-      }
-
-      const content = lines.length > 0
-        ? `Here are the key signals for ${reportTitle}:\n\n- ${lines.join("\n- ")}`
-        : "No KPI values were returned for the selected metrics in this period.";
+      const payload = await queryAnalyticsAi(trimmed, { report_key: reportKey, filters });
 
       const response: EiMessage = {
         id: placeholder.id,
         role: "ei",
         status: "done",
-        content,
+        answer: payload.answer,
         createdAt: placeholder.createdAt,
-        metricKeysUsed: metricKeys,
-        filters: {
-          start: queryStart,
-          end: queryEnd,
-        },
-        suggestedNextActions: Array.from(nextActions).slice(0, 6),
+        metricsUsed: payload.metrics_used ?? [],
+        filtersApplied: payload.filters_applied ?? null,
+        nextStepTasks: payload.next_step_tasks ?? [],
+        evidence: payload.evidence ?? [],
       };
 
       setMessages((current) =>
@@ -442,14 +333,12 @@ export default function EiPanel({ open, onClose, reportKey, reportTitle, initial
         id: placeholder.id,
         role: "ei",
         status: "error",
-        content: error instanceof Error ? error.message : "EI request failed.",
+        answer: error instanceof Error ? error.message : "EI request failed.",
         createdAt: placeholder.createdAt,
-        metricKeysUsed: metricKeys,
-        filters: {
-          start: queryStart,
-          end: queryEnd,
-        },
-        suggestedNextActions: [],
+        metricsUsed: [],
+        filtersApplied: null,
+        nextStepTasks: [],
+        evidence: [],
       };
 
       setMessages((current) =>
@@ -457,6 +346,35 @@ export default function EiPanel({ open, onClose, reportKey, reportTitle, initial
       );
     } finally {
       setIsSending(false);
+    }
+  }
+
+  async function copyAuditRow(row: AnalyticsAiAuditLogRead) {
+    setCopiedAuditId(null);
+    const payload = {
+      id: row.id,
+      created_at: row.created_at,
+      report_key: row.report_key,
+      intent: row.intent,
+      prompt: row.user_prompt,
+      rationale: row.rationale,
+      metrics_used: row.metrics_used,
+      filters_applied: row.filters_applied,
+      query_requests: row.query_requests,
+      query_responses_summary: row.query_responses_summary,
+    };
+    const text = JSON.stringify(payload, null, 2);
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(text);
+      setCopiedAuditId(row.id);
+      window.setTimeout(() => {
+        setCopiedAuditId((current) => (current === row.id ? null : current));
+      }, 1200);
+    } catch (error) {
+      console.error("Unable to copy audit details", error);
     }
   }
 
@@ -485,12 +403,6 @@ export default function EiPanel({ open, onClose, reportKey, reportTitle, initial
             <X className="h-5 w-5" />
           </Button>
         </div>
-
-        {metricsError ? (
-          <div className="border-b border-rose-200 bg-rose-50 px-5 py-3 text-sm text-rose-700">
-            Metrics catalog unavailable: {metricsError}
-          </div>
-        ) : null}
 
         <div ref={chatRef} className="flex-1 overflow-y-auto px-5 py-4">
           <section className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
@@ -640,107 +552,256 @@ export default function EiPanel({ open, onClose, reportKey, reportTitle, initial
             ) : null}
           </section>
 
-          {messages.length === 0 ? (
-            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              Ask a question about this report. EI will use governed metrics from the analytics layer.
-            </div>
-          ) : null}
+          <Tabs value={tab} onValueChange={(value) => setTab(value as EiTab)} className="mt-4">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="ask">Ask</TabsTrigger>
+              <TabsTrigger value="audit">Audit</TabsTrigger>
+            </TabsList>
 
-          <div className="mt-4 space-y-4">
-            {messages.map((msg) => {
-              const isUser = msg.role === "user";
-              if (isUser) {
-                return (
-                  <div key={msg.id} className="flex justify-end">
-                    <div className="max-w-[85%] rounded-2xl bg-slate-900 px-4 py-3 text-sm text-white">
-                      {msg.content}
-                    </div>
-                  </div>
-                );
-              }
-
-              const statusTone = msg.status === "error" ? "border-rose-200 bg-rose-50 text-rose-800" : "border-slate-200 bg-white text-slate-800";
-
-              return (
-                <div key={msg.id} className="flex justify-start">
-                  <div className={`max-w-[90%] rounded-2xl border px-4 py-3 text-sm shadow-sm ${statusTone}`}>
-                    <div className="whitespace-pre-line">{msg.status === "loading" ? "Analyzing metrics..." : msg.content}</div>
-                    {msg.status === "loading" ? (
-                      <div className="mt-2 inline-flex items-center gap-2 text-xs text-slate-500">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Working...
-                      </div>
-                    ) : null}
-
-                    {msg.status !== "loading" ? (
-                      <div className="mt-3 space-y-2">
-                        <div className="text-xs text-slate-600">
-                          <span className="font-semibold text-slate-700">Metric keys:</span>{" "}
-                          {msg.metricKeysUsed.length > 0 ? msg.metricKeysUsed.join(", ") : "none"}
-                        </div>
-                        <div className="text-xs text-slate-600">
-                          <span className="font-semibold text-slate-700">Filters:</span>{" "}
-                          {msg.filters ? `${msg.filters.start} to ${msg.filters.end}` : "none"}
-                        </div>
-                        <div className="text-xs text-slate-600">
-                          <span className="font-semibold text-slate-700">Suggested next actions:</span>
-                          {msg.suggestedNextActions.length > 0 ? (
-                            <ul className="mt-1 list-disc space-y-1 pl-5">
-                              {msg.suggestedNextActions.map((item) => (
-                                <li key={item}>{item}</li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <span> none</span>
-                          )}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {msg.status === "error" ? (
-                      <div className="mt-3">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            const lastUser = [...messages].reverse().find((m) => m.role === "user");
-                            if (lastUser) {
-                              void sendMessage(lastUser.content);
-                            }
-                          }}
-                        >
-                          Retry
-                        </Button>
-                      </div>
-                    ) : null}
-                  </div>
+            <TabsContent value="ask" className="mt-4">
+              {messages.length === 0 ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                  Ask a question about this report. EI will use governed metrics from the analytics layer.
                 </div>
-              );
-            })}
-          </div>
+              ) : null}
+
+              <div className="mt-4 space-y-4">
+                {messages.map((msg) => {
+                  const isUser = msg.role === "user";
+                  if (isUser) {
+                    return (
+                      <div key={msg.id} className="flex justify-end">
+                        <div className="max-w-[85%] rounded-2xl bg-slate-900 px-4 py-3 text-sm text-white">
+                          {msg.content}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  const statusTone = msg.status === "error"
+                    ? "border-rose-200 bg-rose-50 text-rose-800"
+                    : "border-slate-200 bg-white text-slate-800";
+
+                  return (
+                    <div key={msg.id} className="flex justify-start">
+                      <div className={`max-w-[92%] rounded-2xl border px-4 py-3 text-sm shadow-sm ${statusTone}`}>
+                        <div className="whitespace-pre-line">{msg.status === "loading" ? "Analyzing metrics..." : msg.answer}</div>
+                        {msg.status === "loading" ? (
+                          <div className="mt-2 inline-flex items-center gap-2 text-xs text-slate-500">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Working...
+                          </div>
+                        ) : null}
+
+                        {msg.status === "done" ? (
+                          <div className="mt-4 space-y-3">
+                            <div>
+                              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Evidence</p>
+                              {msg.evidence.length > 0 ? (
+                                <div className="mt-2 overflow-hidden rounded-lg border border-slate-200">
+                                  <div className="grid grid-cols-12 gap-2 bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                                    <div className="col-span-6">Metric</div>
+                                    <div className="col-span-3 text-right">Current</div>
+                                    <div className="col-span-3 text-right">Delta</div>
+                                  </div>
+                                  <div className="divide-y divide-slate-200 bg-white">
+                                    {msg.evidence.map((row) => {
+                                      const delta = typeof row.delta_pct === "number" ? formatDeltaPct(row.delta_pct) : "";
+                                      return (
+                                        <div key={`${msg.id}-${row.metric_key}`} className="grid grid-cols-12 gap-2 px-3 py-2 text-xs">
+                                          <div className="col-span-6 min-w-0">
+                                            <p className="truncate font-semibold text-slate-900">{row.label}</p>
+                                            <p className="truncate text-[11px] text-slate-500">{row.metric_key}</p>
+                                            {row.error ? (
+                                              <p className="mt-1 text-[11px] text-rose-700">{row.error}</p>
+                                            ) : null}
+                                          </div>
+                                          <div className="col-span-3 text-right font-semibold text-slate-900">
+                                            {formatMetricValue(row.metric_key, row.current_value ?? null)}
+                                          </div>
+                                          <div className="col-span-3 text-right font-semibold text-slate-700">
+                                            {delta || "-"}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              ) : (
+                                <p className="mt-2 text-xs text-slate-600">No evidence metrics were returned.</p>
+                              )}
+                            </div>
+
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Metrics Used</p>
+                                <p className="mt-1 text-xs text-slate-700">
+                                  {msg.metricsUsed.length > 0 ? msg.metricsUsed.join(", ") : "none"}
+                                </p>
+                              </div>
+                              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Filters Applied</p>
+                                <p className="mt-1 text-xs text-slate-700">{renderFilters(msg.filtersApplied)}</p>
+                              </div>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Next-Step Tasks</p>
+                              {msg.nextStepTasks.length > 0 ? (
+                                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-700">
+                                  {msg.nextStepTasks.map((item) => (
+                                    <li key={item}>{item}</li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="mt-2 text-xs text-slate-600">No tasks suggested.</p>
+                              )}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {msg.status === "error" ? (
+                          <div className="mt-3">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const lastUser = [...messages].reverse().find((m) => m.role === "user");
+                                if (lastUser) {
+                                  void sendMessage(lastUser.content);
+                                }
+                              }}
+                            >
+                              Retry
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="audit" className="mt-4">
+              <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Audit</p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Server-side record of EI interactions (metrics selected, filters applied, and query payloads).
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setAuditRefreshNonce((value) => value + 1)}
+                  >
+                    Refresh
+                  </Button>
+                </div>
+
+                {auditError ? (
+                  <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                    Audit unavailable: {auditError}
+                  </div>
+                ) : null}
+
+                {auditLoading ? (
+                  <div className="mt-4 space-y-2">
+                    {Array.from({ length: 3 }).map((_, index) => (
+                      <div key={`audit-skel-${index}`} className="h-16 animate-pulse rounded-lg bg-slate-100" />
+                    ))}
+                  </div>
+                ) : null}
+
+                {!auditLoading && !auditError ? (
+                  auditRows.length > 0 ? (
+                    <div className="mt-4 space-y-3">
+                      {auditRows.map((row) => {
+                        const range = extractDateRange(row.filters_applied);
+                        return (
+                          <div key={row.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-xs text-slate-500">{formatAuditTime(row.created_at)}</p>
+                                <p className="mt-1 truncate text-sm font-semibold text-slate-900">{row.user_prompt}</p>
+                                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5">
+                                    intent: {row.intent}
+                                  </span>
+                                  {range ? (
+                                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5">
+                                      {range}
+                                    </span>
+                                  ) : null}
+                                  {row.metrics_used.length > 0 ? (
+                                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5">
+                                      {row.metrics_used.join(", ")}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </div>
+
+                              <div className="flex shrink-0 items-center gap-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => void copyAuditRow(row)}
+                                  className="gap-2"
+                                >
+                                  <Clipboard className="h-4 w-4" />
+                                  {copiedAuditId === row.id ? "Copied" : "Copy audit"}
+                                </Button>
+                              </div>
+                            </div>
+
+                            <p className="mt-3 text-xs text-slate-600">
+                              <span className="font-semibold text-slate-700">Filters:</span>{" "}
+                              {renderFilters(row.filters_applied)}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                      No EI audit entries yet.
+                    </div>
+                  )
+                ) : null}
+              </div>
+            </TabsContent>
+          </Tabs>
         </div>
 
-        <form
-          className="border-t border-slate-200 px-5 py-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void sendMessage(draft);
-          }}
-        >
-          <div className="flex items-center gap-2">
-            <input
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="Ask about KPIs, trends, or risk signals..."
-              className="h-10 flex-1 rounded-lg border border-slate-200 px-3 text-sm text-slate-800 placeholder:text-slate-400 focus:border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-            />
-            <Button type="submit" disabled={isSending || !draft.trim()} className="h-10 gap-2">
-              <Send className="h-4 w-4" />
-              Send
-            </Button>
-          </div>
-        </form>
+        {tab === "ask" ? (
+          <form
+            className="border-t border-slate-200 px-5 py-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendMessage(draft);
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <input
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="Ask about KPIs, trends, or risk signals..."
+                className="h-10 flex-1 rounded-lg border border-slate-200 px-3 text-sm text-slate-800 placeholder:text-slate-400 focus:border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              />
+              <Button type="submit" disabled={isSending || !draft.trim()} className="h-10 gap-2">
+                <Send className="h-4 w-4" />
+                Send
+              </Button>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-500">
+              Default window: {filters.start ?? "-"} to {filters.end ?? "-"}
+            </p>
+          </form>
+        ) : null}
       </aside>
     </>
   );

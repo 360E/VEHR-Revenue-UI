@@ -117,3 +117,84 @@ export async function resolveAnalyticsAlert(alertId: string): Promise<AnalyticsA
     cache: "no-store",
   });
 }
+
+export type AnalyticsAiFilters = {
+  start?: string;
+  end?: string;
+  facility_id?: string;
+  program_id?: string;
+  provider_id?: string;
+  payer_id?: string;
+};
+
+export type AnalyticsAiEvidenceMetric = {
+  metric_key: string;
+  label: string;
+  grain: string;
+  current_range_start: string;
+  current_range_end: string;
+  baseline_range_start: string;
+  baseline_range_end: string;
+  current_value?: number | null;
+  baseline_value?: number | null;
+  delta_value?: number | null;
+  delta_pct?: number | null;
+  error?: string | null;
+};
+
+export type AnalyticsAiQueryResponse = {
+  answer: string;
+  metrics_used: string[];
+  filters_applied: Record<string, unknown>;
+  next_step_tasks: string[];
+  evidence: AnalyticsAiEvidenceMetric[];
+};
+
+export async function queryAnalyticsAi(prompt: string, opts: { report_key?: string; filters?: AnalyticsAiFilters } = {}): Promise<AnalyticsAiQueryResponse> {
+  return apiFetch<AnalyticsAiQueryResponse>("/api/v1/analytics/ai/query", {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt,
+      report_key: opts.report_key,
+      filters: opts.filters,
+    }),
+  });
+}
+
+export type AnalyticsAiAuditLogRead = {
+  id: string;
+  organization_id: string;
+  membership_id: string;
+  user_id: string;
+  report_key?: string | null;
+  conversation_id: string;
+  message_id: string;
+  user_prompt: string;
+  intent: string;
+  rationale: string;
+  metrics_used: string[];
+  filters_applied: Record<string, unknown>;
+  query_requests: Array<Record<string, unknown>>;
+  query_responses_summary: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AnalyticsAiAuditQuery = {
+  report_key?: string;
+  since?: string;
+  limit?: number;
+  conversation_id?: string;
+};
+
+export async function fetchAnalyticsAiAudit(params: AnalyticsAiAuditQuery = {}): Promise<AnalyticsAiAuditLogRead[]> {
+  const sp = new URLSearchParams();
+  if (params.report_key) sp.set("report_key", params.report_key);
+  if (params.since) sp.set("since", params.since);
+  if (typeof params.limit === "number") sp.set("limit", String(params.limit));
+  if (params.conversation_id) sp.set("conversation_id", params.conversation_id);
+
+  const suffix = sp.toString();
+  return apiFetch<AnalyticsAiAuditLogRead[]>(`/api/v1/analytics/ai/audit${suffix ? `?${suffix}` : ""}`, { cache: "no-store" });
+}
