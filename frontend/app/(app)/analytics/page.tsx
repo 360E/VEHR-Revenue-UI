@@ -87,15 +87,15 @@ export default function AnalyticsIndexPage() {
       {!isLoading && !error ? (
         reports.length > 0 ? (
           <div className="grid gap-[var(--space-12)] md:grid-cols-2">
-            {reports.map((report) => (
+            {reports.map((item) => (
               <Link
-                key={report.report_key}
-                href={`/analytics/${encodeURIComponent(report.report_key)}`}
+                key={item.report_key}
+                href={`/analytics/${encodeURIComponent(item.report_key)}`}
                 className="rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-16)] shadow-[var(--shadow)] transition-colors hover:bg-[var(--surface-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-primary)]"
               >
-                <p className="text-base font-semibold text-[var(--neutral-text)]">{displayNameForReport(report)}</p>
+                <p className="text-base font-semibold text-[var(--neutral-text)]">{displayNameForReport(item)}</p>
                 <p className="mt-[var(--space-6)] text-xs font-medium text-[var(--neutral-muted)]">
-                  Key: {report.report_key}
+                  Key: {item.report_key}
                 </p>
               </Link>
             ))}

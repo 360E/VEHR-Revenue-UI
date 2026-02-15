@@ -3,13 +3,28 @@ import Link from "next/link";
 import AnalyticsEmbed from "./ui/AnalyticsEmbed";
 
 type AnalyticsReportPageProps = {
-  params: {
-    reportKey: string;
-  };
+  params:
+    | {
+      reportKey?: string;
+    }
+    | Promise<{
+      reportKey?: string;
+    }>;
 };
 
-export default function AnalyticsReportPage({ params }: AnalyticsReportPageProps) {
-  const reportKey = decodeURIComponent(params.reportKey);
+async function resolveParams(
+  params: AnalyticsReportPageProps["params"],
+): Promise<{ reportKey?: string }> {
+  if (typeof (params as { then?: unknown })?.then === "function") {
+    return params as Promise<{ reportKey?: string }>;
+  }
+  return params;
+}
+
+export default async function AnalyticsReportPage({ params }: AnalyticsReportPageProps) {
+  const resolved = await resolveParams(params);
+  const rawReportKey = typeof resolved.reportKey === "string" ? resolved.reportKey : "";
+  const reportKey = decodeURIComponent(rawReportKey).trim();
 
   return (
     <section className="space-y-[var(--space-16)]" data-testid="analytics-report-page">
@@ -21,14 +36,20 @@ export default function AnalyticsReportPage({ params }: AnalyticsReportPageProps
           Back to analytics
         </Link>
         <h1 className="text-2xl font-semibold text-[var(--neutral-text)]">Analytics</h1>
-        <p className="text-sm text-[var(--neutral-muted)]">
-          Report key:{" "}
-          <code className="rounded bg-[var(--surface-muted)] px-2 py-0.5 text-[var(--neutral-text)]">
-            {reportKey}
-          </code>
-        </p>
+        {reportKey ? (
+          <p className="text-sm text-[var(--neutral-muted)]">
+            Report key:{" "}
+            <code className="rounded bg-[var(--surface-muted)] px-2 py-0.5 text-[var(--neutral-text)]">
+              {reportKey}
+            </code>
+          </p>
+        ) : (
+          <p className="text-sm text-[var(--status-critical)]">
+            Missing report key in route. Please return to Analytics and pick a report.
+          </p>
+        )}
       </header>
-      <AnalyticsEmbed reportKey={reportKey} />
+      {reportKey ? <AnalyticsEmbed reportKey={reportKey} /> : null}
     </section>
   );
 }

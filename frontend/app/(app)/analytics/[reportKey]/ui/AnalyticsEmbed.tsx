@@ -44,6 +44,7 @@ function toErrorMessage(error: unknown): string {
 }
 
 export default function AnalyticsEmbed({ reportKey }: AnalyticsEmbedProps) {
+  const normalizedReportKey = reportKey.trim();
   const reportRef = useRef<EmbeddedReportHandle | null>(null);
   const configRef = useRef<EmbedConfigResponse | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -72,12 +73,17 @@ export default function AnalyticsEmbed({ reportKey }: AnalyticsEmbedProps) {
 
   const loadConfig = useCallback(
     async (showLoader: boolean) => {
+      if (!normalizedReportKey) {
+        setError("Missing report key. Return to Analytics and choose a report.");
+        setIsLoading(false);
+        return;
+      }
       if (showLoader) {
         setIsLoading(true);
       }
       setError(null);
       try {
-        const nextConfig = await fetchEmbedConfig(reportKey);
+        const nextConfig = await fetchEmbedConfig(normalizedReportKey);
         if (!isMountedRef.current) {
           return;
         }
@@ -93,17 +99,20 @@ export default function AnalyticsEmbed({ reportKey }: AnalyticsEmbedProps) {
         }
       }
     },
-    [reportKey],
+    [normalizedReportKey],
   );
 
   const refreshToken = useCallback(async () => {
+    if (!normalizedReportKey) {
+      return;
+    }
     if (inFlightRefreshRef.current) {
       return inFlightRefreshRef.current;
     }
 
     const refreshPromise = (async () => {
       try {
-        const nextConfig = await fetchEmbedConfig(reportKey);
+        const nextConfig = await fetchEmbedConfig(normalizedReportKey);
         if (!isMountedRef.current) {
           return;
         }
@@ -137,10 +146,13 @@ export default function AnalyticsEmbed({ reportKey }: AnalyticsEmbedProps) {
 
     inFlightRefreshRef.current = refreshPromise;
     return refreshPromise;
-  }, [reportKey]);
+  }, [normalizedReportKey]);
 
   const accessTokenProvider = useCallback(async () => {
-    const nextConfig = await fetchEmbedConfig(reportKey);
+    if (!normalizedReportKey) {
+      throw new Error("Missing report key.");
+    }
+    const nextConfig = await fetchEmbedConfig(normalizedReportKey);
     if (!isMountedRef.current) {
       return nextConfig.accessToken;
     }
@@ -162,7 +174,7 @@ export default function AnalyticsEmbed({ reportKey }: AnalyticsEmbedProps) {
       setConfig(nextConfig);
     }
     return nextConfig.accessToken;
-  }, [reportKey]);
+  }, [normalizedReportKey]);
 
   useEffect(() => {
     isMountedRef.current = true;

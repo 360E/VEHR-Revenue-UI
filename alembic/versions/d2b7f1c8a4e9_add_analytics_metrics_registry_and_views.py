@@ -92,8 +92,9 @@ def _create_reporting_views() -> None:
 
 
 def _seed_metrics() -> None:
+    conn = op.get_bind()
     for metric_key, description, backing_view, allowed_roles, default_grain in _METRIC_SEEDS:
-        op.execute(
+        conn.execute(
             sa.text(
                 """
                 INSERT INTO analytics_metrics (
