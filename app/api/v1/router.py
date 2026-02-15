@@ -4,6 +4,7 @@ from app.api.v1 import tanner_ai
 from app.api.v1.endpoints import (
     ai_copilot,
     admin_center,
+    analytics,
     audit,
     auth,
     bi,
@@ -49,6 +50,7 @@ api_router.include_router(paperwork.router)
 api_router.include_router(exports.router)
 api_router.include_router(portal.router)
 api_router.include_router(audit.router)
+api_router.include_router(analytics.router)
 api_router.include_router(bi.router)
 api_router.include_router(clinical_audit.router)
 api_router.include_router(webhooks.router)

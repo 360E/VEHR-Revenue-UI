@@ -85,7 +85,7 @@ const MODULE_DEFINITIONS: ModuleDefinition[] = [
       { label: "Audit Center", href: "/audit-center", requiredAnyPermissions: ["audit:read", "audits:read"] },
       {
         label: "Analytics",
-        href: "/analytics/chart_audit",
+        href: "/analytics",
         requiredAnyPermissions: ["analytics:view", "audit:read", "audits:read"],
       },
       { label: "Compliance", href: "/compliance", requiredAnyPermissions: ["compliance:read"] },

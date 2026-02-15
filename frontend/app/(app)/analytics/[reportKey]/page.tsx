@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import AnalyticsEmbed from "./ui/AnalyticsEmbed";
 
 type AnalyticsReportPageProps = {
@@ -12,6 +14,12 @@ export default function AnalyticsReportPage({ params }: AnalyticsReportPageProps
   return (
     <section className="space-y-[var(--space-16)]" data-testid="analytics-report-page">
       <header className="space-y-[var(--space-6)]">
+        <Link
+          href="/analytics"
+          className="inline-flex text-xs font-medium text-[var(--brand-primary)] hover:text-[var(--brand-primary-600)]"
+        >
+          Back to analytics
+        </Link>
         <h1 className="text-2xl font-semibold text-[var(--neutral-text)]">Analytics</h1>
         <p className="text-sm text-[var(--neutral-muted)]">
           Report key:{" "}

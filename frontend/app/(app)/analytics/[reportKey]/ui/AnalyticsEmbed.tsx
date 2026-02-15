@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { models } from "powerbi-client";
+import { models, type IEmbedConfiguration } from "powerbi-client";
 
 import { fetchEmbedConfig, type EmbedConfigResponse } from "@/lib/bi";
 
@@ -110,6 +110,7 @@ export default function AnalyticsEmbed({ reportKey }: AnalyticsEmbedProps) {
 
         const currentConfig = configRef.current;
         const sameReport = currentConfig
+          && currentConfig.reportId
           && currentConfig.reportId === nextConfig.reportId
           && currentConfig.embedUrl === nextConfig.embedUrl;
 
@@ -136,6 +137,31 @@ export default function AnalyticsEmbed({ reportKey }: AnalyticsEmbedProps) {
 
     inFlightRefreshRef.current = refreshPromise;
     return refreshPromise;
+  }, [reportKey]);
+
+  const accessTokenProvider = useCallback(async () => {
+    const nextConfig = await fetchEmbedConfig(reportKey);
+    if (!isMountedRef.current) {
+      return nextConfig.accessToken;
+    }
+
+    const currentConfig = configRef.current;
+    if (
+      currentConfig
+      && currentConfig.reportId
+      && currentConfig.reportId === nextConfig.reportId
+      && currentConfig.embedUrl === nextConfig.embedUrl
+    ) {
+      setConfig({
+        ...currentConfig,
+        accessToken: nextConfig.accessToken,
+        tokenExpiry: nextConfig.tokenExpiry,
+        expiresOn: nextConfig.expiresOn,
+      });
+    } else {
+      setConfig(nextConfig);
+    }
+    return nextConfig.accessToken;
   }, [reportKey]);
 
   useEffect(() => {
@@ -171,10 +197,11 @@ export default function AnalyticsEmbed({ reportKey }: AnalyticsEmbedProps) {
   }, [clearSchedules, config, refreshToken]);
 
   const embedConfig = useMemo(() => {
-    if (!config) {
+    if (!config || !config.reportId) {
       return undefined;
     }
-    return {
+
+    const nextEmbedConfig: IEmbedConfiguration = {
       type: "report",
       id: config.reportId,
       embedUrl: config.embedUrl,
@@ -192,7 +219,19 @@ export default function AnalyticsEmbed({ reportKey }: AnalyticsEmbedProps) {
         background: models.BackgroundType.Transparent,
       },
     };
-  }, [config]);
+
+    (
+      nextEmbedConfig as IEmbedConfiguration & {
+        eventHooks?: {
+          accessTokenProvider?: () => Promise<string>;
+        };
+      }
+    ).eventHooks = {
+      accessTokenProvider,
+    };
+
+    return nextEmbedConfig;
+  }, [accessTokenProvider, config]);
 
   const eventHandlers = useMemo(
     () =>
