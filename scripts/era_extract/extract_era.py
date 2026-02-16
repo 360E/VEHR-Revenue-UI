@@ -495,12 +495,56 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Extract ERA patient + claim lines to Excel (sheet: ClaimLines).")
     p.add_argument("--pdf", required=True, help="Path to an ERA PDF")
     p.add_argument("--out", required=False, help="Output .xlsx path (default: outputs/eras/<pdf>__extracted.xlsx)")
+    p.add_argument("--save-analyze-json", required=False, help="Save full Azure DI JSON response to this path")
+    p.add_argument(
+        "--save-content-txt",
+        required=False,
+        help="Save analyzeResult.content text to this path (only when --save-analyze-json is used)",
+    )
     return p
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    run(Path(args.pdf), Path(args.out) if args.out else None)
+    out_path = run(Path(args.pdf), Path(args.out) if args.out else None)
+    if args.save_analyze_json:
+        # Re-run analysis with a single call to capture the raw response for offline reuse.
+        pdf_path = Path(args.pdf).resolve()
+        if not pdf_path.exists():
+            raise FileNotFoundError(str(pdf_path))
+
+        verify_env()
+        model_id = (os.getenv("AZURE_DOCINTEL_MODEL") or "prebuilt-layout").strip() or "prebuilt-layout"
+        client, _ = create_document_intelligence_client()
+        result = _analyze_with_retries(client, model_id, pdf_path, pages=None)
+
+        raw = None
+        if hasattr(result, "to_dict"):
+            raw = result.to_dict()
+        if raw is None:
+            try:
+                raw = json.loads(json.dumps(result, default=lambda o: o.__dict__))
+            except Exception:
+                raw = {"content": getattr(result, "content", "")}
+
+        save_path = Path(args.save_analyze_json)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        save_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+
+        if args.save_content_txt:
+            content = ""
+            if isinstance(raw, dict):
+                analyze = raw.get("analyzeResult")
+                if isinstance(analyze, dict):
+                    content = analyze.get("content") or ""
+                if not content:
+                    content = raw.get("content") or ""
+            Path(args.save_content_txt).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.save_content_txt).write_text(content, encoding="utf-8")
+
+        print(f"[era_extract] saved analyze JSON: {save_path}")
+        if args.save_content_txt:
+            print(f"[era_extract] saved content text: {Path(args.save_content_txt)}")
     return 0
 
 

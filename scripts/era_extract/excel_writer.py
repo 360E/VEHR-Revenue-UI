@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -12,6 +13,19 @@ from openpyxl.utils import get_column_letter
 class TableFrame:
     name: str
     df: pd.DataFrame
+
+
+def _safe_len(value: object) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, float) and math.isnan(value):
+        return 0
+    try:
+        if pd.isna(value):
+            return 0
+    except Exception:
+        pass
+    return len(str(value))
 
 
 def write_claim_lines_xlsx(out_path: Path, rows: Sequence[dict[str, Any]]) -> None:
@@ -39,7 +53,51 @@ def write_claim_lines_xlsx(out_path: Path, rows: Sequence[dict[str, Any]]) -> No
         ws.freeze_panes = "A2"
         for col_idx, col in enumerate(cols, start=1):
             series = df[col].astype(str)
-            max_len = max([len(col)] + [len(v) for v in series.head(500).tolist()])
+            max_len = max([_safe_len(col)] + [_safe_len(v) for v in series.head(500).tolist()])
+            ws.column_dimensions[get_column_letter(col_idx)].width = min(max(12, max_len + 2), 60)
+
+
+def write_recon_lines_xlsx(
+    out_path: Path,
+    rows: Sequence[dict[str, Any]],
+    *,
+    sheet_name: str = "ReconLines",
+) -> None:
+    """Write a single-sheet workbook for content-based ERA parsing."""
+    cols = [
+        "account_id",
+        "payer_claim_number",
+        "icn",
+        "patient_name",
+        "patient_id",
+        "line_ctrl_number",
+        "dos_from",
+        "dos_to",
+        "proc_code",
+        "units",
+        "billed_amount",
+        "allowed_amount",
+        "paid_amount",
+        "adj_code",
+        "adj_amount",
+        "era_row_confidence",
+        "row_is_probably_junk",
+        "source_layout",
+    ]
+    df = pd.DataFrame(list(rows))
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+    df = df[cols]
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+        ws = writer.book[sheet_name]
+        ws.freeze_panes = "A2"
+        for col_idx, col in enumerate(cols, start=1):
+            series = df[col].astype(str)
+            max_len = max([_safe_len(col)] + [_safe_len(v) for v in series.head(500).tolist()])
             ws.column_dimensions[get_column_letter(col_idx)].width = min(max(12, max_len + 2), 60)
 
 
@@ -81,6 +139,6 @@ def write_tables_to_xlsx(out_path: Path, tables: list[TableFrame]) -> None:
             # Auto-size columns (approx) with a cap to keep it readable.
             for col_idx, col in enumerate(t.df.columns, start=1):
                 series = t.df[col].astype(str) if col in t.df.columns else pd.Series([""])
-                max_len = max([len(str(col))] + [len(v) for v in series.head(200).tolist()])
+                max_len = max([_safe_len(col)] + [_safe_len(v) for v in series.head(200).tolist()])
                 width = min(max(10, max_len + 2), 60)
                 ws.column_dimensions[get_column_letter(col_idx)].width = width
