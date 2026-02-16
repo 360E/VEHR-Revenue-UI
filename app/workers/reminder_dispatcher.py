@@ -5,7 +5,7 @@ import logging
 import time
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -14,7 +14,10 @@ from app.db.models.ai_message import AiMessage
 from app.db.models.ai_thread import AiThread
 from app.db.models.assistant_notification import AssistantNotification
 from app.db.models.assistant_reminder import AssistantReminder
+from app.db.models.organization_membership import OrganizationMembership
 from app.db.session import SessionLocal
+from app.services.assistant.agent_registry import get_agent
+from app.services.assistant.msft_reminders import ensure_msft_artifacts_for_reminder
 from app.services.ai_copilot import AiCopilotError, encrypt_sensitive_text
 from app.services.audit import log_event
 
@@ -24,6 +27,83 @@ logger = logging.getLogger(__name__)
 # Fixed poll interval for Phase-1 (avoid introducing new env vars).
 POLL_SECONDS = 30
 CLAIM_LIMIT = 25
+
+
+def retry_pending_msft_channels(db: Session, *, limit: int = CLAIM_LIMIT, tool_db: Session | None = None) -> int:
+    now = utc_now()
+    query = (
+        select(AssistantReminder)
+        .where(
+            AssistantReminder.status == "scheduled",
+            AssistantReminder.due_at > now,
+            AssistantReminder.msft_next_attempt_at.is_not(None),
+            AssistantReminder.msft_next_attempt_at <= now,
+            or_(
+                AssistantReminder.msft_task_id.is_(None),
+                AssistantReminder.msft_event_id.is_(None),
+            ),
+        )
+        .order_by(AssistantReminder.msft_next_attempt_at.asc())
+        .limit(limit)
+    )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        query = query.with_for_update(skip_locked=True)
+
+    rows = db.execute(query).scalars().all()
+    if not rows:
+        return 0
+
+    agent = get_agent("enterprise_copilot")
+    if agent is None:
+        return 0
+
+    processed = 0
+    created_tool_db = False
+    if tool_db is None:
+        tool_db = SessionLocal()
+        created_tool_db = True
+    try:
+        for reminder in rows:
+            channels = reminder.channels if isinstance(reminder.channels, dict) else {}
+            needs_todo = bool(channels.get("todo")) and not (reminder.msft_task_id or "").strip()
+            needs_outlook = bool(channels.get("outlook")) and not (reminder.msft_event_id or "").strip()
+            if not (needs_todo or needs_outlook):
+                # Nothing to do; clear retry markers to avoid infinite polling.
+                reminder.msft_next_attempt_at = None
+                reminder.msft_last_error = None
+                db.add(reminder)
+                db.commit()
+                processed += 1
+                continue
+
+            membership = db.execute(
+                select(OrganizationMembership).where(
+                    OrganizationMembership.organization_id == reminder.organization_id,
+                    OrganizationMembership.user_id == reminder.user_id,
+                )
+            ).scalar_one_or_none()
+            if membership is None:
+                reminder.msft_last_error = "membership_not_found"
+                reminder.msft_next_attempt_at = None
+                db.add(reminder)
+                db.commit()
+                processed += 1
+                continue
+
+            ensure_msft_artifacts_for_reminder(
+                db=db,
+                tool_db=tool_db,
+                reminder=reminder,
+                membership=membership,
+                agent=agent,
+                trigger="worker",
+            )
+            processed += 1
+    finally:
+        if created_tool_db and tool_db is not None:
+            tool_db.close()
+
+    return processed
 
 
 def dispatch_due_reminders(db: Session, *, limit: int = CLAIM_LIMIT) -> int:
@@ -152,6 +232,9 @@ def run_loop() -> None:
     while True:
         db = SessionLocal()
         try:
+            retried = retry_pending_msft_channels(db)
+            if retried:
+                logger.info("assistant_reminder_dispatcher_msft_retried count=%s", retried)
             fired = dispatch_due_reminders(db)
             if fired:
                 logger.info("assistant_reminder_dispatcher_fired count=%s", fired)

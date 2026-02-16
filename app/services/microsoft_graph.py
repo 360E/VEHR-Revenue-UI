@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models.integration_account import IntegrationAccount
+from app.db.models.user_microsoft_connection import UserMicrosoftConnection
 from app.services.graph_client import (
     MicrosoftGraphClientError,
     MicrosoftGraphNotConnectedError,
@@ -145,6 +146,24 @@ def _graph_scopes() -> str:
     return os.getenv("MS_GRAPH_SCOPES", "").strip() or DEFAULT_GRAPH_SCOPES
 
 
+def _normalize_scopes_list(scopes: list[str] | None) -> list[str]:
+    if scopes is None:
+        scopes = [item.strip() for item in _graph_scopes().split() if item.strip()]
+    ordered: list[str] = []
+    for scope in scopes:
+        normalized = str(scope or "").strip()
+        if not normalized or normalized in ordered:
+            continue
+        ordered.append(normalized)
+    return ordered
+
+
+def _access_token_cache_key(*, account_id: str, scopes: list[str]) -> str:
+    # Scope-aware cache to avoid reusing a token missing Tasks/Calendars permissions for assistant flows.
+    normalized_scopes = " ".join(sorted(scopes))
+    return f"{account_id}:{normalized_scopes}"
+
+
 def _normalize_host(host: str) -> str:
     return host.strip().lower().rstrip(".")
 
@@ -192,31 +211,33 @@ def _integration_account_for_user(*, db: Session, organization_id: str, user_id:
     return account
 
 
-def _cached_access_token(*, account_id: str) -> str | None:
-    cached = _ACCESS_TOKEN_CACHE.get(account_id)
+def _cached_access_token(*, account_id: str, scopes: list[str]) -> str | None:
+    cache_key = _access_token_cache_key(account_id=account_id, scopes=scopes)
+    cached = _ACCESS_TOKEN_CACHE.get(cache_key)
     if not cached:
         return None
     if cached.expires_at <= _now_utc():
-        _ACCESS_TOKEN_CACHE.pop(account_id, None)
+        _ACCESS_TOKEN_CACHE.pop(cache_key, None)
         return None
     return cached.access_token
 
 
-def _cache_access_token(*, account_id: str, access_token: str, expires_in_seconds: int) -> None:
+def _cache_access_token(*, account_id: str, scopes: list[str], access_token: str, expires_in_seconds: int) -> None:
     ttl_seconds = max(expires_in_seconds - 60, 30)
-    _ACCESS_TOKEN_CACHE[account_id] = _CachedAccessToken(
+    cache_key = _access_token_cache_key(account_id=account_id, scopes=scopes)
+    _ACCESS_TOKEN_CACHE[cache_key] = _CachedAccessToken(
         access_token=access_token,
         expires_at=_now_utc() + timedelta(seconds=ttl_seconds),
     )
 
 
-def _token_refresh_payload(*, refresh_token: str) -> dict[str, str]:
+def _token_refresh_payload(*, refresh_token: str, scopes: list[str]) -> dict[str, str]:
     return {
         "client_id": _required_env("MS_CLIENT_ID"),
         "client_secret": _required_env("MS_CLIENT_SECRET"),
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
-        "scope": _graph_scopes(),
+        "scope": " ".join(scopes),
     }
 
 
@@ -239,7 +260,7 @@ def _parse_graph_error(response: httpx.Response, body: Any) -> tuple[str, int]:
     return detail, 502
 
 
-def _refresh_access_token(*, db: Session, account: IntegrationAccount) -> str:
+def _refresh_access_token(*, db: Session, account: IntegrationAccount, scopes: list[str]) -> str:
     try:
         refresh_token = decrypt_token(account.refresh_token_enc)
     except TokenEncryptionError as exc:
@@ -248,7 +269,7 @@ def _refresh_access_token(*, db: Session, account: IntegrationAccount) -> str:
     try:
         response = httpx.post(
             MICROSOFT_TOKEN_URL,
-            data=_token_refresh_payload(refresh_token=refresh_token),
+            data=_token_refresh_payload(refresh_token=refresh_token, scopes=scopes),
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=GRAPH_TIMEOUT_SECONDS,
         )
@@ -287,6 +308,7 @@ def _refresh_access_token(*, db: Session, account: IntegrationAccount) -> str:
 
     _cache_access_token(
         account_id=account.id,
+        scopes=scopes,
         access_token=access_token,
         expires_in_seconds=expires_in_seconds,
     )
@@ -298,8 +320,10 @@ def _access_token_for_user(
     db: Session,
     organization_id: str,
     user_id: str,
+    scopes: list[str] | None = None,
     force_refresh: bool = False,
 ) -> tuple[str, IntegrationAccount]:
+    normalized_scopes = _normalize_scopes_list(scopes)
     account = _integration_account_for_user(
         db=db,
         organization_id=organization_id,
@@ -307,22 +331,22 @@ def _access_token_for_user(
     )
 
     if not force_refresh:
-        cached = _cached_access_token(account_id=account.id)
+        cached = _cached_access_token(account_id=account.id, scopes=normalized_scopes)
         if cached:
             return cached, account
 
     # Prefer MSAL token cache when available, but fall back to refresh-token flow.
     try:
-        scopes = [item.strip() for item in _graph_scopes().split() if item.strip()]
         access_token = acquire_graph_token(
             db=db,
             organization_id=organization_id,
             user_id=user_id,
-            scopes=scopes or None,
+            scopes=normalized_scopes or None,
             force_refresh=force_refresh,
         )
         _cache_access_token(
             account_id=account.id,
+            scopes=normalized_scopes,
             access_token=access_token,
             expires_in_seconds=3600,
         )
@@ -332,7 +356,7 @@ def _access_token_for_user(
     except MicrosoftGraphClientError as exc:
         logger.warning("Microsoft Graph MSAL token acquisition failed: %s", exc.detail)
 
-    return _refresh_access_token(db=db, account=account), account
+    return _refresh_access_token(db=db, account=account, scopes=normalized_scopes), account
 
 
 def _graph_request_json(
@@ -342,16 +366,19 @@ def _graph_request_json(
     user_id: str,
     method: str,
     path: str,
+    scopes: list[str] | None = None,
     params: dict[str, str] | None = None,
     json_body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     target_url = f"{GRAPH_BASE_URL}/{path.lstrip('/')}"
+    normalized_scopes = _normalize_scopes_list(scopes)
 
     for attempt in range(2):
         access_token, account = _access_token_for_user(
             db=db,
             organization_id=organization_id,
             user_id=user_id,
+            scopes=normalized_scopes,
             force_refresh=attempt > 0,
         )
         try:
@@ -367,7 +394,10 @@ def _graph_request_json(
             raise MicrosoftGraphServiceError("Microsoft Graph request failed", 502) from exc
 
         if response.status_code == 401 and attempt == 0:
-            _ACCESS_TOKEN_CACHE.pop(account.id, None)
+            _ACCESS_TOKEN_CACHE.pop(
+                _access_token_cache_key(account_id=account.id, scopes=normalized_scopes),
+                None,
+            )
             continue
 
         body: Any = {}
@@ -393,6 +423,7 @@ def _graph_get_json(
     organization_id: str,
     user_id: str,
     path: str,
+    scopes: list[str] | None = None,
     params: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return _graph_request_json(
@@ -401,6 +432,7 @@ def _graph_get_json(
         user_id=user_id,
         method="GET",
         path=path,
+        scopes=scopes,
         params=params,
     )
 
@@ -411,6 +443,7 @@ def _graph_post_json(
     organization_id: str,
     user_id: str,
     path: str,
+    scopes: list[str] | None = None,
     body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _graph_request_json(
@@ -419,6 +452,7 @@ def _graph_post_json(
         user_id=user_id,
         method="POST",
         path=path,
+        scopes=scopes,
         json_body=body,
     )
 
@@ -980,3 +1014,181 @@ def get_sharepoint_item_download(
         content_length=content_length,
         web_url=web_url,
     )
+
+
+_ASSISTANT_REMINDER_GRAPH_SCOPES = [
+    "User.Read",
+    "Tasks.ReadWrite",
+    "Calendars.ReadWrite",
+]
+
+
+def _microsoft_connection_for_user(
+    *,
+    db: Session,
+    organization_id: str,
+    user_id: str,
+) -> UserMicrosoftConnection | None:
+    return db.execute(
+        select(UserMicrosoftConnection).where(
+            UserMicrosoftConnection.organization_id == organization_id,
+            UserMicrosoftConnection.user_id == user_id,
+        )
+    ).scalar_one_or_none()
+
+
+def _resolve_or_create_todo_list_id(
+    *,
+    db: Session,
+    organization_id: str,
+    user_id: str,
+    list_name: str,
+) -> str:
+    connection = _microsoft_connection_for_user(db=db, organization_id=organization_id, user_id=user_id)
+    cached_list_id = str(connection.todo_list_id).strip() if connection and connection.todo_list_id else ""
+    if cached_list_id:
+        return cached_list_id
+
+    body = _graph_get_json(
+        db=db,
+        organization_id=organization_id,
+        user_id=user_id,
+        path="me/todo/lists",
+        scopes=_ASSISTANT_REMINDER_GRAPH_SCOPES,
+        params={"$top": "100"},
+    )
+    rows = body.get("value", [])
+    if not isinstance(rows, list):
+        rows = []
+
+    resolved_id: str | None = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        display_name = str(row.get("displayName", "")).strip()
+        if display_name != list_name:
+            continue
+        list_id = str(row.get("id", "")).strip()
+        if list_id:
+            resolved_id = list_id
+            break
+
+    if resolved_id is None:
+        created = _graph_post_json(
+            db=db,
+            organization_id=organization_id,
+            user_id=user_id,
+            path="me/todo/lists",
+            scopes=_ASSISTANT_REMINDER_GRAPH_SCOPES,
+            body={"displayName": list_name},
+        )
+        resolved_id = str(created.get("id", "")).strip() or None
+
+    if not resolved_id:
+        raise MicrosoftGraphServiceError("Microsoft Graph To Do list create response missing id", 502)
+
+    if connection is not None:
+        connection.todo_list_id = resolved_id
+        db.add(connection)
+        db.commit()
+
+    return resolved_id
+
+
+def create_todo_task_draft(
+    *,
+    db: Session,
+    organization_id: str,
+    user_id: str,
+    list_name: str,
+    title: str,
+    body: str,
+    due_datetime: str,
+    time_zone: str,
+) -> str:
+    list_id = _resolve_or_create_todo_list_id(
+        db=db,
+        organization_id=organization_id,
+        user_id=user_id,
+        list_name=list_name,
+    )
+
+    task_payload: dict[str, Any] = {
+        "title": title,
+        "body": {"contentType": "text", "content": body},
+        "dueDateTime": {"dateTime": due_datetime, "timeZone": time_zone},
+    }
+
+    try:
+        created = _graph_post_json(
+            db=db,
+            organization_id=organization_id,
+            user_id=user_id,
+            path=f"me/todo/lists/{list_id}/tasks",
+            scopes=_ASSISTANT_REMINDER_GRAPH_SCOPES,
+            body=task_payload,
+        )
+    except MicrosoftGraphServiceError as exc:
+        # Clear cached list id if it was deleted/renamed and retry once.
+        if exc.status_code == 404:
+            connection = _microsoft_connection_for_user(db=db, organization_id=organization_id, user_id=user_id)
+            if connection is not None and connection.todo_list_id:
+                connection.todo_list_id = None
+                db.add(connection)
+                db.commit()
+            list_id = _resolve_or_create_todo_list_id(
+                db=db,
+                organization_id=organization_id,
+                user_id=user_id,
+                list_name=list_name,
+            )
+            created = _graph_post_json(
+                db=db,
+                organization_id=organization_id,
+                user_id=user_id,
+                path=f"me/todo/lists/{list_id}/tasks",
+                scopes=_ASSISTANT_REMINDER_GRAPH_SCOPES,
+                body=task_payload,
+            )
+        else:
+            raise
+
+    task_id = str(created.get("id", "")).strip()
+    if not task_id:
+        raise MicrosoftGraphServiceError("Microsoft Graph To Do task create response missing id", 502)
+    return task_id
+
+
+def create_outlook_event_draft(
+    *,
+    db: Session,
+    organization_id: str,
+    user_id: str,
+    subject: str,
+    body: str,
+    start_datetime: str,
+    end_datetime: str,
+    time_zone: str,
+    transaction_id: str | None = None,
+) -> str:
+    event_payload: dict[str, Any] = {
+        "subject": subject,
+        "body": {"contentType": "text", "content": body},
+        "start": {"dateTime": start_datetime, "timeZone": time_zone},
+        "end": {"dateTime": end_datetime, "timeZone": time_zone},
+    }
+    if transaction_id:
+        event_payload["transactionId"] = transaction_id
+
+    created = _graph_post_json(
+        db=db,
+        organization_id=organization_id,
+        user_id=user_id,
+        path="me/events",
+        scopes=_ASSISTANT_REMINDER_GRAPH_SCOPES,
+        body=event_payload,
+    )
+    event_id = str(created.get("id", "")).strip()
+    if not event_id:
+        raise MicrosoftGraphServiceError("Microsoft Graph event create response missing id", 502)
+    return event_id

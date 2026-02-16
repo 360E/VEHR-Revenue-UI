@@ -27,6 +27,11 @@ from app.services.assistant.enterprise_copilot import (
     generate_reply as generate_enterprise_reply,
     wants_reminder,
 )
+from app.services.assistant.msft_reminders import (
+    channel_names as reminder_channel_names,
+    ensure_msft_artifacts_for_reminder,
+    select_reminder_channels,
+)
 from app.services.assistant.tool_gateway import execute_tool
 from app.services.ai_copilot import (
     AiCopilotError,
@@ -137,6 +142,13 @@ class AssistantReminderRead(BaseModel):
     nag_interval_minutes: int | None = None
     created_at: datetime
     fired_at: datetime | None = None
+    msft_task_id: str | None = None
+    msft_event_id: str | None = None
+    msft_channel_status_json: dict[str, Any] = Field(default_factory=dict)
+    msft_last_error: str | None = None
+    msft_attempt_count: int = 0
+    msft_next_attempt_at: datetime | None = None
+    warnings: list[str] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -397,6 +409,7 @@ def create_assistant_reminder(
     membership=Depends(get_current_membership),
     _: None = Depends(require_permission("tasks:read_self")),
 ) -> AssistantReminderRead:
+    selected_channels = select_reminder_channels(due_at=payload.due_at, raw_channels=payload.channels)
     reminder = AssistantReminder(
         organization_id=membership.organization_id,
         user_id=membership.user_id,
@@ -404,7 +417,7 @@ def create_assistant_reminder(
         title=payload.title.strip()[:255],
         body=payload.body,
         due_at=payload.due_at,
-        channels=payload.channels,
+        channels=selected_channels,
         status="scheduled",
         repeat_mode=payload.repeat_mode,
         nag_interval_minutes=payload.nag_interval_minutes,
@@ -425,12 +438,26 @@ def create_assistant_reminder(
             "org_id": membership.organization_id,
             "thread_id": reminder.thread_id,
             "due_at": reminder.due_at.isoformat(),
-            "channels": reminder.channels,
+            "channels": selected_channels,
             "repeat_mode": reminder.repeat_mode,
         },
     )
 
-    return reminder
+    agent = get_agent("enterprise_copilot")
+    warnings: list[str] = []
+    if agent is not None:
+        warnings = ensure_msft_artifacts_for_reminder(
+            db=db,
+            tool_db=None,
+            reminder=reminder,
+            membership=membership,
+            agent=agent,
+            trigger="api",
+        )
+        db.refresh(reminder)
+
+    response = AssistantReminderRead.model_validate(reminder, from_attributes=True)
+    return response.model_copy(update={"warnings": warnings})
 
 
 @router.patch("/ai/reminders/{reminder_id}", response_model=AssistantReminderRead)
@@ -737,6 +764,8 @@ def chat_with_copilot(
                     warnings.append("reminder_time_missing")
                     fallback = True
                 else:
+                    selected_channels = select_reminder_channels(due_at=due_at, raw_channels=None, message=message)
+
                     def _create_reminder() -> dict[str, Any]:
                         reminder = AssistantReminder(
                             organization_id=membership.organization_id,
@@ -745,7 +774,7 @@ def chat_with_copilot(
                             title=message.strip()[:255],
                             body=None,
                             due_at=due_at,
-                            channels={"in_chat": True},
+                            channels=selected_channels,
                             status="scheduled",
                             repeat_mode="one_shot",
                             nag_interval_minutes=None,
@@ -771,14 +800,32 @@ def chat_with_copilot(
                                 "workstation_id": workstation_id,
                             },
                         )
-                        return {"reminder_id": reminder.id, "due_at": reminder.due_at.isoformat()}
+                        msft_warnings = ensure_msft_artifacts_for_reminder(
+                            db=db,
+                            tool_db=None,
+                            reminder=reminder,
+                            membership=membership,
+                            agent=agent,
+                            trigger="chat",
+                            patient_id=patient_id,
+                            workstation_id=workstation_id,
+                        )
+                        db.refresh(reminder)
+                        return {
+                            "reminder_id": reminder.id,
+                            "due_at": reminder.due_at.isoformat(),
+                            "channels": reminder.channels,
+                            "msft_task_id": reminder.msft_task_id,
+                            "msft_event_id": reminder.msft_event_id,
+                            "warnings": msft_warnings,
+                        }
 
                     tool_result = execute_tool(
                         db=db,
                         membership=membership,
                         agent=agent,
                         tool_id="reminder.create",
-                        args={"message": message, "due_at": due_at.isoformat()},
+                        args={"message": message, "due_at": due_at.isoformat(), "channels": selected_channels},
                         patient_id=patient_id,
                         workstation_id=workstation_id,
                         executor=_create_reminder,
@@ -799,10 +846,14 @@ def chat_with_copilot(
                         warnings.append(tool_result.error or "reminder_blocked")
                         fallback = True
                     else:
+                        result_warnings = []
+                        if tool_result.result and isinstance(tool_result.result.get("warnings"), list):
+                            result_warnings = [str(item) for item in tool_result.result.get("warnings") if str(item).strip()]
+                        warnings.extend(result_warnings)
                         assistant_content = build_reminder_summary(
                             title=message.strip()[:255],
                             due_at=due_at,
-                            channels=["in_chat"],
+                            channels=reminder_channel_names(selected_channels),
                             repeat_mode="one_shot",
                         )
                         fallback = True

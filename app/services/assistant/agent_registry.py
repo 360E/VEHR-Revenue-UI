@@ -35,6 +35,9 @@ _DEFAULT_AGENTS: dict[str, AgentDefinition] = {
                 "memory.delete",
                 "reminder.create",
                 "reminder.update",
+                # Microsoft 365 reminder channels (draft-only).
+                "ms.todo.task.create_draft",
+                "ms.outlook.event.create_draft",
             }
         ),
         allowed_domains=frozenset({"enterprise"}),
@@ -58,4 +61,3 @@ def get_agent(agent_id: str) -> AgentDefinition | None:
 
 def list_agents_for_role(role: str) -> list[AgentDefinition]:
     return [agent for agent in _DEFAULT_AGENTS.values() if agent.role_allowed(role)]
-
