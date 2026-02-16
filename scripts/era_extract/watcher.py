@@ -82,14 +82,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--once",
-        dest="once",
-        action="store_true",
-        help="Process existing PDFs in the directory once, then exit (smoke-test mode).",
+        dest="once_pdf",
+        nargs="?",
+        const="__ALL__",
+        help="Run once then exit. Optional value: a specific PDF path to process.",
     )
     return p
 
 
-def _run_once(watch_dir: Path, settle_seconds: float) -> int:
+def _run_once(watch_dir: Path, settle_seconds: float, once_pdf: str | None = None) -> int:
+    if once_pdf and once_pdf != "__ALL__":
+        single = Path(once_pdf).resolve()
+        if not single.exists() or single.suffix.lower() != ".pdf":
+            print(f"[era_extract] invalid --once PDF path: {single}")
+            return 1
+        try:
+            _wait_for_stable_file(single, settle_seconds=settle_seconds)
+            run(single)
+            return 0
+        except Exception as e:
+            print(f"[era_extract] failed for {single.name}: {e}")
+            return 1
+
     pdfs = sorted([p for p in watch_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"])
     if not pdfs:
         print(f"[era_extract] no PDFs found in {watch_dir}")
@@ -109,8 +123,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     watch_dir = Path(args.watch_dir).resolve() if args.watch_dir else _default_in_dir().resolve()
     watch_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.once:
-        return _run_once(watch_dir, float(args.settle))
+    if args.once_pdf:
+        return _run_once(watch_dir, float(args.settle), args.once_pdf)
 
     handler = _Handler(settle_seconds=float(args.settle))
     observer = Observer()
