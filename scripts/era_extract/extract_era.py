@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Optional
 
 from scripts.era_extract.docintel_client import create_document_intelligence_client
-from scripts.era_extract.excel_writer import write_lines_xlsx
+from scripts.era_extract.docintel_client import load_repo_dotenv
+from scripts.era_extract.docintel_client import verify_env as verify_env
+from scripts.era_extract.excel_writer import write_claim_lines_xlsx
+from scripts.era_extract.table_selector import find_detail_table, table_header_text_by_col
 
 
 def _repo_root() -> Path:
@@ -69,55 +73,6 @@ def _extract_patient_fields(result: Any, cfg: dict[str, Any]) -> tuple[str, str]
     return patient_name, patient_id
 
 
-def _table_header_text_by_col(table: Any) -> dict[int, str]:
-    # Build header (row 0) text per column; handles multi-cell headers by joining.
-    col_text: dict[int, list[str]] = {}
-    for cell in getattr(table, "cells", []) or []:
-        r = int(getattr(cell, "row_index", 0))
-        c = int(getattr(cell, "column_index", 0))
-        if r != 0:
-            continue
-        txt = (getattr(cell, "content", "") or "").strip()
-        if not txt:
-            continue
-        col_text.setdefault(c, []).append(txt)
-    return {c: " ".join(v).strip() for c, v in col_text.items()}
-
-
-def _find_detail_table(tables: list[Any], required_headers: list[str]) -> tuple[Optional[Any], Optional[dict[str, int]]]:
-    req = [_norm(x) for x in required_headers]
-
-    best = None
-    best_match = -1
-    best_cols: Optional[dict[str, int]] = None
-
-    for t in tables:
-        headers = _table_header_text_by_col(t)
-        # For matching, treat each column header as a normalized blob.
-        norm_headers = {c: _norm(txt) for c, txt in headers.items()}
-
-        cols: dict[str, int] = {}
-        match_count = 0
-        for want in req:
-            found_col = None
-            for c, htxt in norm_headers.items():
-                if want and want in htxt:
-                    found_col = c
-                    break
-            if found_col is not None:
-                match_count += 1
-                cols[want] = found_col
-
-        if match_count > best_match:
-            best_match = match_count
-            best = t
-            best_cols = cols
-
-    if best is None or best_match < len(req):
-        return None, None
-    return best, best_cols
-
-
 def _cell_text_grid(table: Any) -> list[list[str]]:
     row_count = int(getattr(table, "row_count", 0) or 0)
     col_count = int(getattr(table, "column_count", 0) or 0)
@@ -149,16 +104,19 @@ def extract_era_lines(pdf_path: Path) -> tuple[list[dict[str, Any]], dict[str, A
     if not required_headers:
         raise RuntimeError("config.json missing detail_table_required_headers")
 
+    load_repo_dotenv()
+    model_id = (os.getenv("AZURE_DOCINTEL_MODEL") or "prebuilt-layout").strip() or "prebuilt-layout"
+
     client, doc_cfg = create_document_intelligence_client()
     with pdf_path.open("rb") as f:
-        poller = client.begin_analyze_document(model_id="prebuilt-layout", body=f)
+        poller = client.begin_analyze_document(model_id=model_id, body=f)
     result = poller.result()
 
     patient_name, patient_id = _extract_patient_fields(result, cfg)
     tables = list(getattr(result, "tables", []) or [])
 
-    detail_table, cols = _find_detail_table(tables, list(required_headers))
-    if not detail_table or not cols:
+    match = find_detail_table(tables, list(required_headers))
+    if not match:
         return (
             [],
             {
@@ -171,14 +129,15 @@ def extract_era_lines(pdf_path: Path) -> tuple[list[dict[str, Any]], dict[str, A
 
     # Map required header normalized strings to actual columns.
     req_norm = [_norm(x) for x in required_headers]
+    cols = match.cols_by_required_header_norm
     line_ctrl_col = cols[_norm(required_headers[0])] if _norm(required_headers[0]) in cols else cols[req_norm[0]]
     dos_col = cols[_norm(required_headers[1])] if _norm(required_headers[1]) in cols else cols[req_norm[1]]
     charge_col = cols[_norm(required_headers[2])] if _norm(required_headers[2]) in cols else cols[req_norm[2]]
     payment_col = cols[_norm(required_headers[3])] if _norm(required_headers[3]) in cols else cols[req_norm[3]]
 
-    header_by_col = _table_header_text_by_col(detail_table)
+    header_by_col = table_header_text_by_col(match.table)
     modifier_col = _pick_modifier_units_col(
-        detail_table,
+        match.table,
         required_cols={line_ctrl_col, dos_col, charge_col, payment_col},
         hints=list(cfg.get("modifier_units_header_hints") or []),
         header_by_col=header_by_col,
@@ -190,7 +149,7 @@ def extract_era_lines(pdf_path: Path) -> tuple[list[dict[str, Any]], dict[str, A
                 modifier_col = c
                 break
 
-    grid = _cell_text_grid(detail_table)
+    grid = _cell_text_grid(match.table)
     rows_out: list[dict[str, Any]] = []
 
     for r in range(1, len(grid)):
@@ -211,16 +170,16 @@ def extract_era_lines(pdf_path: Path) -> tuple[list[dict[str, Any]], dict[str, A
             {
                 "Patient Name": patient_name,
                 "Patient ID": patient_id,
-                "Claim ID": claim_id,
-                "Date of Service": dos,
-                "Modifier Units": modifier_units,
+                "Claim Line ID": claim_id,
+                "Dates of Service": dos,
+                "Modifier/Units": modifier_units,
                 "Charge": charge,
                 "Payment": payment,
             }
         )
 
     meta = {
-        "model_id": "prebuilt-layout",
+        "model_id": model_id,
         "patient_name": patient_name,
         "patient_id": patient_id,
         "table_count": len(tables),
@@ -238,7 +197,9 @@ def run(pdf_path: Path, out_path: Optional[Path] = None) -> Path:
 
     out_path = (out_path or _default_out_for(pdf_path)).resolve()
 
-    print(f"[era_extract] analyzing: {pdf_path.name} (model=prebuilt-layout)")
+    verify_env()
+    model_id = (os.getenv("AZURE_DOCINTEL_MODEL") or "prebuilt-layout").strip() or "prebuilt-layout"
+    print(f"[era_extract] analyzing: {pdf_path.name} (model={model_id})")
     lines, meta = extract_era_lines(pdf_path)
 
     if not lines:
@@ -249,13 +210,13 @@ def run(pdf_path: Path, out_path: Optional[Path] = None) -> Path:
     else:
         print(f"[era_extract] extracted_lines={meta.get('extracted_lines')}")
 
-    write_lines_xlsx(out_path, lines)
+    write_claim_lines_xlsx(out_path, lines)
     print(f"[era_extract] wrote: {out_path}")
     return out_path
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Extract ERA patient + claim lines to Excel (sheet: Lines).")
+    p = argparse.ArgumentParser(description="Extract ERA patient + claim lines to Excel (sheet: ClaimLines).")
     p.add_argument("--pdf", required=True, help="Path to an ERA PDF")
     p.add_argument("--out", required=False, help="Output .xlsx path (default: outputs/eras/<pdf>__extracted.xlsx)")
     return p
@@ -269,4 +230,3 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

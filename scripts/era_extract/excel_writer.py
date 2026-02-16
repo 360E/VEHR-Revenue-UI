@@ -14,14 +14,14 @@ class TableFrame:
     df: pd.DataFrame
 
 
-def write_lines_xlsx(out_path: Path, rows: Sequence[dict[str, Any]]) -> None:
-    """Write a single-sheet workbook named 'Lines' with the expected columns."""
+def write_claim_lines_xlsx(out_path: Path, rows: Sequence[dict[str, Any]]) -> None:
+    """Write a single-sheet workbook named 'ClaimLines' with the expected columns."""
     cols = [
         "Patient Name",
         "Patient ID",
-        "Claim ID",
-        "Date of Service",
-        "Modifier Units",
+        "Claim Line ID",
+        "Dates of Service",
+        "Modifier/Units",
         "Charge",
         "Payment",
     ]
@@ -34,8 +34,8 @@ def write_lines_xlsx(out_path: Path, rows: Sequence[dict[str, Any]]) -> None:
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Lines")
-        ws = writer.book["Lines"]
+        df.to_excel(writer, index=False, sheet_name="ClaimLines")
+        ws = writer.book["ClaimLines"]
         ws.freeze_panes = "A2"
         for col_idx, col in enumerate(cols, start=1):
             series = df[col].astype(str)

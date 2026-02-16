@@ -13,6 +13,5 @@ Put them in a local `.env` at the repo root (already gitignored).
 
 ### Watch folder
 ```powershell
-.\.venv313\Scripts\python.exe -m scripts.era_extract.watch_folder
+.\.venv313\Scripts\python.exe -m scripts.era_extract.watcher
 ```
-

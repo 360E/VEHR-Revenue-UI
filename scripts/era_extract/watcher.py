@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from scripts.era_extract.docintel_client import verify_env as verify_env
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -46,10 +47,7 @@ class _Handler(FileSystemEventHandler):
     def __init__(self, settle_seconds: float):
         self.settle_seconds = settle_seconds
 
-    def on_created(self, event):
-        if getattr(event, "is_directory", False):
-            return
-        path = Path(getattr(event, "src_path", ""))
+    def _process(self, path: Path) -> None:
         if path.suffix.lower() != ".pdf":
             return
         try:
@@ -60,32 +58,59 @@ class _Handler(FileSystemEventHandler):
             # No silent failures; watcher keeps running.
             print(f"[era_extract] failed for {path.name}: {e}")
 
-    def on_moved(self, event):
-        # Handle atomic writes where files appear via move into directory.
+    def on_created(self, event):
         if getattr(event, "is_directory", False):
             return
-        dest = Path(getattr(event, "dest_path", ""))
-        if dest.suffix.lower() != ".pdf":
+        self._process(Path(getattr(event, "src_path", "")))
+
+    def on_moved(self, event):
+        if getattr(event, "is_directory", False):
             return
-        try:
-            _wait_for_stable_file(dest, settle_seconds=self.settle_seconds)
-            out = run(dest)
-            print(str(out))
-        except Exception as e:
-            print(f"[era_extract] failed for {dest.name}: {e}")
+        self._process(Path(getattr(event, "dest_path", "")))
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Watch inputs/eras and auto-extract new PDFs to outputs/eras.")
     p.add_argument("--dir", dest="watch_dir", required=False, help="Directory to watch (default: inputs/eras)")
-    p.add_argument("--settle", dest="settle", required=False, type=float, default=1.0, help="Seconds file must be stable before processing")
+    p.add_argument(
+        "--settle",
+        dest="settle",
+        required=False,
+        type=float,
+        default=1.0,
+        help="Seconds file must be stable before processing",
+    )
+    p.add_argument(
+        "--once",
+        dest="once",
+        action="store_true",
+        help="Process existing PDFs in the directory once, then exit (smoke-test mode).",
+    )
     return p
 
 
+def _run_once(watch_dir: Path, settle_seconds: float) -> int:
+    pdfs = sorted([p for p in watch_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"])
+    if not pdfs:
+        print(f"[era_extract] no PDFs found in {watch_dir}")
+        return 0
+    for pdf in pdfs:
+        try:
+            _wait_for_stable_file(pdf, settle_seconds=settle_seconds)
+            run(pdf)
+        except Exception as e:
+            print(f"[era_extract] failed for {pdf.name}: {e}")
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
+    verify_env()
     args = build_parser().parse_args(argv)
     watch_dir = Path(args.watch_dir).resolve() if args.watch_dir else _default_in_dir().resolve()
     watch_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.once:
+        return _run_once(watch_dir, float(args.settle))
 
     handler = _Handler(settle_seconds=float(args.settle))
     observer = Observer()
