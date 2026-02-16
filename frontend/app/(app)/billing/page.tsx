@@ -1,10 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { FormEvent, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ApiError, apiFetch } from "@/lib/api";
 import MetricCard from "../_components/MetricCard";
+import { UploadCard } from "../_components/recon-components";
 
 const billingItems = [
   { item: "Claims pending", status: "Review needed", risk: "Medium" },
@@ -18,7 +21,64 @@ const auditTrail = [
   "Exception queue reconciled for prior period",
 ];
 
+const BILLED_TRACK_OPTIONS = ["CHPW", "Coordinated Care", "Wellpoint", "Billing"] as const;
+
+type ImportResponse = {
+  job_id: string;
+  status: string;
+  duplicate?: boolean;
+  prior_job_id?: string | null;
+};
+
+function toErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof ApiError || error instanceof Error) {
+    return error.message || fallback;
+  }
+  return fallback;
+}
+
 export default function BillingPage() {
+  const [eraFile, setEraFile] = useState<File | null>(null);
+  const [billedFile, setBilledFile] = useState<File | null>(null);
+  const [billedTrack, setBilledTrack] = useState("");
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [duplicateJobId, setDuplicateJobId] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSubmit = Boolean(eraFile && billedFile && billedTrack);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!eraFile || !billedFile || !billedTrack) return;
+
+    setError(null);
+    setIsSubmitting(true);
+    setDuplicateJobId(null);
+    setJobId(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("era_pdf", eraFile, eraFile.name);
+      formData.append("billed_pdf", billedFile, billedFile.name);
+      formData.append("billed_track", billedTrack);
+
+      const response = await apiFetch<ImportResponse>("/api/v1/billing/recon/import", {
+        method: "POST",
+        body: formData,
+      });
+
+      setJobId(response.job_id);
+      if (response.duplicate) {
+        setDuplicateJobId(response.prior_job_id ?? response.job_id);
+      }
+    } catch (submitError) {
+      setError(toErrorMessage(submitError, "Failed to submit reconciliation job."));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-8">
       <div className="space-y-3">
@@ -43,7 +103,7 @@ export default function BillingPage() {
           <CardContent className="space-y-3 pt-0 text-sm text-slate-600">
             Upload ERA and billed claims PDFs to reconcile in one pass.
             <Button asChild variant="outline">
-              <Link href="/billing/era-import">Start import</Link>
+              <Link href="/billing/era-import">Open full import page</Link>
             </Button>
           </CardContent>
         </Card>
@@ -59,6 +119,88 @@ export default function BillingPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="bg-white shadow-sm">
+        <CardHeader className="space-y-1">
+          <CardTitle className="text-xl text-slate-900">Quick ERA Import</CardTitle>
+          <p className="text-sm text-slate-500">Drop PDFs here to start a reconciliation job.</p>
+        </CardHeader>
+        <CardContent>
+          <form className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]" onSubmit={handleSubmit}>
+            <div className="space-y-4">
+              {error ? (
+                <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
+                  {error}
+                </div>
+              ) : null}
+              {duplicateJobId ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+                  Already imported.{" "}
+                  <Link className="font-semibold underline" href={`/billing/reconciliation?job_id=${duplicateJobId}&view=claim`}>
+                    View reconciliation
+                  </Link>
+                </div>
+              ) : null}
+
+              <UploadCard
+                title="ERA PDF"
+                description="Payer remittance advice document."
+                file={eraFile}
+                onFileChange={(file) => {
+                  setEraFile(file);
+                  setError(null);
+                }}
+                onError={(message) => setError(message)}
+              />
+              <UploadCard
+                title="Billed Claims PDF"
+                description="The billed claims report from your clearinghouse."
+                file={billedFile}
+                onFileChange={(file) => {
+                  setBilledFile(file);
+                  setError(null);
+                }}
+                onError={(message) => setError(message)}
+              />
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Billed PDF type
+                <select
+                  className="mt-1 h-10 w-full rounded-[var(--radius-6)] border border-[color-mix(in_srgb,var(--neutral-border)_72%,white)] bg-[var(--neutral-panel)] px-3 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  value={billedTrack}
+                  onChange={(event) => {
+                    setBilledTrack(event.target.value);
+                    setError(null);
+                  }}
+                  required
+                >
+                  <option value="">Select billed PDF type</option>
+                  {BILLED_TRACK_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <Button type="submit" disabled={!canSubmit || isSubmitting} className="w-full">
+                {isSubmitting ? "Uploading..." : "Import & Reconcile"}
+              </Button>
+
+              {jobId ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  Job submitted.{" "}
+                  <Link className="font-semibold underline" href={`/billing/reconciliation?job_id=${jobId}&view=claim`}>
+                    View reconciliation
+                  </Link>
+                </div>
+              ) : null}
+            </div>
+          </form>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
         <Card className="bg-white shadow-sm">
