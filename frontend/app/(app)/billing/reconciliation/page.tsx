@@ -33,6 +33,8 @@ type JobStatusResponse = {
   status: string;
   created_at?: string;
   finished_at?: string | null;
+  distinct_member_id_count?: number | null;
+  member_id_is_useful?: boolean | null;
 };
 
 type ClaimResultsResponse = {
@@ -298,7 +300,7 @@ export default function ReconciliationPage() {
         setClaimRows(
           data.rows
             .slice()
-            .sort((a, b) => (a.account_id ?? "").localeCompare(b.account_id ?? "") || a.id - b.id),
+          .sort((a, b) => (a.claim_id ?? a.account_id ?? "").localeCompare(b.claim_id ?? b.account_id ?? "") || a.id - b.id),
         );
       } catch (error) {
         if (!active) return;
@@ -344,9 +346,9 @@ export default function ReconciliationPage() {
 
   useEffect(() => {
     if (!selectedClaim || !jobId) return;
-    if (!selectedClaim.account_id) {
+    if (!selectedClaim.claim_id && !selectedClaim.account_id) {
       setClaimLines([]);
-      setClaimLineNote("Line-level matching is unavailable for claims without an account ID.");
+      setClaimLineNote("Line-level matching is unavailable for claims without a claim ID.");
       return;
     }
     let active = true;
@@ -362,14 +364,15 @@ export default function ReconciliationPage() {
         params.set("page_size", "100");
         params.set("limit", "100");
         params.set("offset", "0");
-        params.set("claim_id", selectedClaim.account_id ?? "");
+        params.set("claim_id", selectedClaim.claim_id ?? selectedClaim.account_id ?? "");
         const data = await apiFetch<LineResultsResponse | LineResultsAltResponse>(
           `/api/v1/billing/recon/import/${jobId}/results?${params.toString()}`,
           { cache: "no-store" },
         );
         if (!active) return;
         const normalized = normalizeLineResponse(data, 1, 100);
-        const filtered = normalized.rows.filter((row) => row.account_id === selectedClaim.account_id);
+        const selectedId = selectedClaim.claim_id ?? selectedClaim.account_id;
+        const filtered = normalized.rows.filter((row) => (row.claim_id ?? row.account_id) === selectedId);
         setClaimLines(filtered);
         if (normalized.total > normalized.rows.length) {
           setClaimLineNote("Showing the first page of line items. Filtered results may be incomplete.");
@@ -545,7 +548,7 @@ export default function ReconciliationPage() {
                       ) : (
                         lineRows.map((row) => (
                           <TableRow key={row.id} className="text-slate-700">
-                            <TableCell className="font-medium text-slate-900">{row.account_id ?? "—"}</TableCell>
+                            <TableCell className="font-medium text-slate-900">{row.claim_id ?? row.account_id ?? "—"}</TableCell>
                             <TableCell>
                               {row.dos_from ?? "—"}
                               {row.dos_to && row.dos_to !== row.dos_from ? ` - ${row.dos_to}` : ""}
@@ -587,6 +590,7 @@ export default function ReconciliationPage() {
         loading={claimLineLoading}
         error={claimLineError}
         note={claimLineNote}
+        showMemberId={Boolean(jobStatus?.member_id_is_useful)}
         onClose={() => setSelectedClaim(null)}
       />
     </div>

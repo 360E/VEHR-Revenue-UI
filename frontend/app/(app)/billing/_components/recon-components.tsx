@@ -20,6 +20,8 @@ import { cn } from "@/lib/utils";
 export type ReconClaimRow = {
   id: number;
   account_id?: string | null;
+  claim_id?: string | null;
+  member_id?: string | null;
   match_status: string;
   billed_total?: number | string | null;
   paid_total?: number | string | null;
@@ -31,6 +33,8 @@ export type ReconClaimRow = {
 export type ReconLineRow = {
   id: number;
   account_id?: string | null;
+  claim_id?: string | null;
+  member_id?: string | null;
   dos_from?: string | null;
   dos_to?: string | null;
   proc_code?: string | null;
@@ -75,6 +79,7 @@ type ClaimDetailDrawerProps = {
   loading: boolean;
   error?: string | null;
   note?: string | null;
+  showMemberId?: boolean;
   onClose: () => void;
 };
 
@@ -256,7 +261,7 @@ export function ReconciliationSection({ title, rows, totals, onSelect }: Reconci
                   className={onSelect ? "cursor-pointer" : undefined}
                   onClick={() => onSelect?.(row)}
                 >
-                  <TableCell className="font-medium text-slate-900">{row.account_id ?? "—"}</TableCell>
+                  <TableCell className="font-medium text-slate-900">{row.claim_id ?? row.account_id ?? "—"}</TableCell>
                   <TableCell>{row.match_status}</TableCell>
                   <TableCell className="text-right">{row.billed_total ?? "—"}</TableCell>
                   <TableCell className="text-right">{row.paid_total ?? "—"}</TableCell>
@@ -280,6 +285,7 @@ export function ClaimDetailDrawer({
   loading,
   error,
   note,
+  showMemberId,
   onClose,
 }: ClaimDetailDrawerProps) {
   if (!open || !claim) return null;
@@ -296,7 +302,10 @@ export function ClaimDetailDrawer({
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Claim</p>
-            <h2 className="text-xl font-semibold text-slate-900">{claim.account_id ?? "Unlinked claim"}</h2>
+            <h2 className="text-xl font-semibold text-slate-900">{claim.claim_id ?? claim.account_id ?? "Unlinked claim"}</h2>
+            {showMemberId && claim.member_id ? (
+              <p className="text-xs text-slate-500">Member ID: {claim.member_id}</p>
+            ) : null}
           </div>
           <Button type="button" variant="ghost" onClick={onClose}>
             <X className="h-4 w-4" />

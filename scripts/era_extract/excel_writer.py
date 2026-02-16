@@ -32,7 +32,7 @@ def write_claim_lines_xlsx(out_path: Path, rows: Sequence[dict[str, Any]]) -> No
     """Write a single-sheet workbook named 'ClaimLines' with the expected columns."""
     cols = [
         "Patient Name",
-        "Patient ID",
+        "Member ID",
         "Claim Line ID",
         "Dates of Service",
         "Modifier/Units",
@@ -69,7 +69,8 @@ def write_recon_lines_xlsx(
         "payer_claim_number",
         "icn",
         "patient_name",
-        "patient_id",
+        "member_id",
+        "claim_id",
         "line_ctrl_number",
         "dos_from",
         "dos_to",

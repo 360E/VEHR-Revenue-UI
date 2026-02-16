@@ -324,7 +324,7 @@ def _extract_rows_from_tables(
                 rows_out.append(
                     {
                         "Patient Name": patient_name,
-                        "Patient ID": patient_id,
+                        "Member ID": patient_id,
                         "Claim Line ID": claim_id,
                         "Dates of Service": dos,
                         "Modifier/Units": modifier_units,
@@ -438,7 +438,7 @@ def extract_era_lines(pdf_path: Path) -> tuple[list[dict[str, Any]], dict[str, A
             [],
             {
                 "patient_name": patient_name,
-                "patient_id": patient_id,
+                "member_id": patient_id,
                 "table_count": overall_stats.total_tables_iterated,
                 "error": "No ERA detail rows found",
             },
@@ -447,7 +447,7 @@ def extract_era_lines(pdf_path: Path) -> tuple[list[dict[str, Any]], dict[str, A
     meta = {
         "model_id": model_id,
         "patient_name": patient_name,
-        "patient_id": patient_id,
+        "member_id": patient_id,
         "table_count": overall_stats.total_tables_iterated,
         "extracted_lines": len(all_rows),
         "unique_claim_keys": overall_stats.unique_claim_keys,

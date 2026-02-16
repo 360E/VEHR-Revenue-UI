@@ -112,20 +112,61 @@ def _extract_icn(block: str) -> str | None:
 def _extract_patient_name(block: str) -> str | None:
     if not block:
         return None
-    m = re.search(r"(?im)^\s*(?:Patient\s+Name|NAME)\s*:\s*(.+?)\s*$", block)
+    header_region = _claim_header_region(block)
+    m = re.search(r"(?im)^\s*Patient\s+Name\s*:\s*(.+?)\s*$", header_region)
+    if not m:
+        # Fallback only if "NAME" line includes "Patient" in the same line.
+        m = re.search(r"(?im)^\s*NAME\s*:\s*(.+?)\s*$", header_region)
     if not m:
         return None
     name = m.group(1).strip()
     return name or None
 
 
-def _extract_patient_id(block: str) -> str | None:
+def _extract_member_id(block: str) -> str | None:
     if not block:
         return None
-    m = re.search(r"(?im)^\s*Patient\s*ID\s*:\s*([A-Za-z0-9\-]+)\s*$", block)
-    if not m:
-        return None
-    return m.group(1).strip() or None
+    header_region = _claim_header_region(block)
+    patterns = [
+        r"(?im)^\s*Patient\s*ID\s*[:#]?\s*([^\n]+)\s*$",
+        r"(?im)^\s*Member\s*ID\s*[:#]?\s*([^\n]+)\s*$",
+        r"(?im)^\s*Subscriber\s*ID\s*[:#]?\s*([^\n]+)\s*$",
+        r"(?im)^\s*ID\s*#\s*[:#]?\s*([^\n]+)\s*$",
+        r"(?im)^\s*Medicaid\s*ID\s*[:#]?\s*([^\n]+)\s*$",
+    ]
+    for rx in patterns:
+        m = re.search(rx, header_region)
+        if m:
+            raw = m.group(1).strip()
+            if raw:
+                normalized = re.sub(r"\s+", "", raw)
+                return normalized or None
+    return None
+
+
+def _claim_header_region(block: str) -> str:
+    if not block:
+        return ""
+    lines = block.splitlines()
+    header_lines: list[str] = []
+    for line in lines:
+        lowered = line.lower()
+        if "line details" in lowered or "line ctrl nmbr" in lowered:
+            break
+        header_lines.append(line)
+    return "\n".join(header_lines)
+
+
+def _block_has_member_id_label(block: str) -> bool:
+    if not block:
+        return False
+    header_region = _claim_header_region(block)
+    return bool(
+        re.search(
+            r"(?im)^\s*(Patient\s*ID|Member\s*ID|Subscriber\s*ID|ID\s*#|Medicaid\s*ID)\b",
+            header_region,
+        )
+    )
 
 
 def _normalize_name(name: str | None) -> str | None:
@@ -351,7 +392,8 @@ def _parse_era_table_layout(
     claim_number: str | None,
     icn: str | None,
     patient_name: str | None,
-    patient_id: str | None,
+    member_id: str | None,
+    claim_id: str | None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     rows: list[dict[str, Any]] = []
     stats = {
@@ -481,7 +523,8 @@ def _parse_era_table_layout(
             "payer_claim_number": claim_number,
             "icn": icn,
             "patient_name": patient_name,
-            "patient_id": patient_id,
+            "member_id": member_id,
+            "claim_id": claim_id,
             "line_ctrl_number": line_id,
             "dos_from": dos_from,
             "dos_to": dos_to,
@@ -543,7 +586,8 @@ def _parse_era_monospace_layout(
     claim_number: str | None,
     icn: str | None,
     patient_name: str | None,
-    patient_id: str | None,
+    member_id: str | None,
+    claim_id: str | None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     lines = _clean_lines(block)
@@ -591,7 +635,8 @@ def _parse_era_monospace_layout(
             "payer_claim_number": claim_number,
             "icn": icn,
             "patient_name": patient_name,
-            "patient_id": patient_id,
+            "member_id": member_id,
+            "claim_id": claim_id,
             "line_ctrl_number": None,
             "dos_from": dos_from,
             "dos_to": dos_to,
@@ -650,9 +695,21 @@ def parse_era_content(
         "blocks_missing_patient_name": 0,
         "distinct_patient_name_hashes_count": 0,
         "rows_returned_by_parser": 0,
+        "blocks_with_member_id": 0,
+        "blocks_missing_member_id": 0,
+        "distinct_member_id_count_before": 0,
+        "distinct_member_id_count_after": 0,
+        "header_member_id_present": 0,
+        "member_id_global_suppressed": 0,
+        "distinct_claim_id_count": 0,
     }
     rows: list[dict[str, Any]] = []
     patient_name_hashes: set[str] = set()
+    member_id_values: set[str] = set()
+    claim_id_values: set[str] = set()
+    header_member_id = _extract_member_id((content or "")[:2000])
+    if header_member_id:
+        counters["header_member_id_present"] = 1
 
     if content:
         counters["patient_name_anchors"] = len(re.findall(r"(?i)Patient\s+Name\s*:", content))
@@ -676,7 +733,9 @@ def parse_era_content(
         claim_number = _extract_claim_number(block)
         icn = _extract_icn(block)
         patient_name = _extract_patient_name(block)
-        patient_id = _extract_patient_id(block)
+        member_id = _extract_member_id(block)
+        if member_id and header_member_id and member_id == header_member_id and not _block_has_member_id_label(block):
+            member_id = None
         if patient_name:
             counters["blocks_with_patient_name"] += 1
             normalized = _normalize_name(patient_name)
@@ -685,6 +744,15 @@ def parse_era_content(
                 patient_name_hashes.add(digest)
         else:
             counters["blocks_missing_patient_name"] += 1
+        if member_id:
+            counters["blocks_with_member_id"] += 1
+            member_id_values.add(member_id)
+        else:
+            counters["blocks_missing_member_id"] += 1
+
+        claim_id = account_id or None
+        if claim_id:
+            claim_id_values.add(claim_id)
         parsed_rows: list[dict[str, Any]] = []
         table_rows, table_stats = _parse_era_table_layout(
             block,
@@ -692,7 +760,8 @@ def parse_era_content(
             claim_number=claim_number,
             icn=icn,
             patient_name=patient_name,
-            patient_id=patient_id,
+            member_id=member_id,
+            claim_id=claim_id,
         )
         monospace_rows = _parse_era_monospace_layout(
             block,
@@ -700,7 +769,8 @@ def parse_era_content(
             claim_number=claim_number,
             icn=icn,
             patient_name=patient_name,
-            patient_id=patient_id,
+            member_id=member_id,
+            claim_id=claim_id,
         )
         parsed_rows.extend(table_rows)
         parsed_rows.extend(monospace_rows)
@@ -741,6 +811,16 @@ def parse_era_content(
         rows.extend(parsed_rows)
 
     counters["distinct_patient_name_hashes_count"] = len(patient_name_hashes)
+    counters["distinct_member_id_count_before"] = len(member_id_values)
+    counters["distinct_claim_id_count"] = len(claim_id_values)
+
+    if counters["distinct_claim_id_count"] > 1 and counters["distinct_member_id_count_before"] == 1:
+        for row in rows:
+            row["member_id"] = None
+        counters["member_id_global_suppressed"] = 1
+        counters["distinct_member_id_count_after"] = 0
+    else:
+        counters["distinct_member_id_count_after"] = len({row.get("member_id") for row in rows if row.get("member_id")})
 
     if debug:
         print(
@@ -881,6 +961,11 @@ def parse_billed_content(content: str, billed_track: str) -> tuple[list[dict[str
         account_id = _extract_account_id(block)
         if not account_id:
             counters["missing_key_count"] += 1
+        claim_id = None
+        m = re.search(r"(?im)^\s*Claim\s*ID\s*:\s*([A-Za-z0-9\-]+)\s*$", block)
+        if m:
+            claim_id = m.group(1).strip()
+        member_id = _extract_member_id(block)
 
         lines = _clean_lines(block)
         block_rows: list[dict[str, Any]] = []
@@ -913,6 +998,8 @@ def parse_billed_content(content: str, billed_track: str) -> tuple[list[dict[str
             block_rows.append(
                 {
                     "account_id": account_id,
+                    "claim_id": claim_id or account_id,
+                    "member_id": member_id,
                     "dos_from": parsed.get("dos_from"),
                     "dos_to": parsed.get("dos_to"),
                     "proc_code": parsed.get("proc_code"),

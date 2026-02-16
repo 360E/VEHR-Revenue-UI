@@ -14,6 +14,8 @@ Put them in a local `.env` at the repo root (already gitignored).
 ### Offline parse (no Azure SDK)
 Parse from a saved Azure DI JSON response or plain text. This mode does not import any `azure.*` modules.
 
+Note: The output uses **Member ID** (not Patient ID). Member ID may be blank if not present per claim.
+
 ```powershell
 .\.venv313\Scripts\python.exe -m scripts.era_extract.parse_content --doc-type era --analyze-json "outputs\\eras\\era_di_output.json" --out-xlsx "outputs\\eras\\era_lines.xlsx"
 ```

@@ -18,6 +18,7 @@ class BilledLine(Base):
     org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=False, index=True)
 
     account_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    member_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     dos_from: Mapped[date | None] = mapped_column(Date, nullable=True)
     dos_to: Mapped[date | None] = mapped_column(Date, nullable=True)
     proc_code: Mapped[str | None] = mapped_column(String(40), nullable=True)

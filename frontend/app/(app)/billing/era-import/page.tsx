@@ -35,6 +35,8 @@ type StatusResponse = {
   denied_claims?: number | null;
   needs_review_claims?: number | null;
   closed_claims?: number | null;
+  distinct_member_id_count?: number | null;
+  member_id_is_useful?: boolean | null;
   output_xlsx_path?: string | null;
   error_message?: string | null;
   created_at?: string;

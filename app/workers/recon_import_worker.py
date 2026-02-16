@@ -68,6 +68,10 @@ def _norm_text(value: str | None) -> str:
     return (value or "").strip().upper()
 
 
+def _claim_id(row: dict[str, Any]) -> str | None:
+    return (row.get("claim_id") or row.get("account_id") or "").strip() or None
+
+
 def _same_service(billed_row: dict[str, Any], era_row: dict[str, Any], tolerance: Decimal) -> bool:
     billed_proc = _norm_text(billed_row.get("proc_code"))
     era_proc = _norm_text(era_row.get("proc_code"))
@@ -118,28 +122,28 @@ def _reconcile_rows(
     line_results: list[dict[str, Any]] = []
     summary = ReconSummary()
 
-    billed_by_account: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    era_by_account: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    billed_by_claim: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    era_by_claim: dict[str, list[dict[str, Any]]] = defaultdict(list)
     billed_missing: list[dict[str, Any]] = []
     era_missing: list[dict[str, Any]] = []
 
     for row in billed_rows:
-        account_id = (row.get("account_id") or "").strip()
-        if account_id:
-            billed_by_account[account_id].append(row)
+        claim_id = _claim_id(row)
+        if claim_id:
+            billed_by_claim[claim_id].append(row)
         else:
             billed_missing.append(row)
     for row in era_rows:
-        account_id = (row.get("account_id") or "").strip()
-        if account_id:
-            era_by_account[account_id].append(row)
+        claim_id = _claim_id(row)
+        if claim_id:
+            era_by_claim[claim_id].append(row)
         else:
             era_missing.append(row)
 
-    all_accounts = sorted(set(billed_by_account.keys()) | set(era_by_account.keys()))
-    for account_id in all_accounts:
-        billed_group = billed_by_account.get(account_id, [])
-        era_group = era_by_account.get(account_id, [])
+    all_claims = sorted(set(billed_by_claim.keys()) | set(era_by_claim.keys()))
+    for claim_id in all_claims:
+        billed_group = billed_by_claim.get(claim_id, [])
+        era_group = era_by_claim.get(claim_id, [])
 
         used_era: set[int] = set()
         collisions = 0
@@ -165,7 +169,8 @@ def _reconcile_rows(
                     reason_code = "variance_outside_tolerance"
                 line_results.append(
                     {
-                        "account_id": account_id,
+                        "account_id": claim_id,
+                        "claim_id": claim_id,
                         "dos_from": billed.get("dos_from") or era.get("dos_from"),
                         "dos_to": billed.get("dos_to") or era.get("dos_to"),
                         "proc_code": billed.get("proc_code") or era.get("proc_code"),
@@ -179,7 +184,8 @@ def _reconcile_rows(
             elif len(candidates) == 0:
                 line_results.append(
                     {
-                        "account_id": account_id,
+                        "account_id": claim_id,
+                        "claim_id": claim_id,
                         "dos_from": billed.get("dos_from"),
                         "dos_to": billed.get("dos_to"),
                         "proc_code": billed.get("proc_code"),
@@ -194,7 +200,8 @@ def _reconcile_rows(
                 collisions += 1
                 line_results.append(
                     {
-                        "account_id": account_id,
+                        "account_id": claim_id,
+                        "claim_id": claim_id,
                         "dos_from": billed.get("dos_from"),
                         "dos_to": billed.get("dos_to"),
                         "proc_code": billed.get("proc_code"),
@@ -211,7 +218,8 @@ def _reconcile_rows(
                 continue
             line_results.append(
                 {
-                    "account_id": account_id,
+                    "account_id": claim_id,
+                    "claim_id": claim_id,
                     "dos_from": era.get("dos_from"),
                     "dos_to": era.get("dos_to"),
                     "proc_code": era.get("proc_code"),
@@ -259,7 +267,8 @@ def _reconcile_rows(
 
         claim_results.append(
             {
-                "account_id": account_id,
+                "account_id": claim_id,
+                "claim_id": claim_id,
                 "match_status": claim_status,
                 "billed_total": billed_total if billed_group else None,
                 "paid_total": paid_total if era_group else None,
@@ -291,6 +300,7 @@ def _reconcile_rows(
             line_results.append(
                 {
                     "account_id": None,
+                    "claim_id": None,
                     "dos_from": billed.get("dos_from") or era.get("dos_from"),
                     "dos_to": billed.get("dos_to") or era.get("dos_to"),
                     "proc_code": billed.get("proc_code") or era.get("proc_code"),
@@ -305,6 +315,7 @@ def _reconcile_rows(
             line_results.append(
                 {
                     "account_id": None,
+                    "claim_id": None,
                     "dos_from": billed.get("dos_from"),
                     "dos_to": billed.get("dos_to"),
                     "proc_code": billed.get("proc_code"),
@@ -319,6 +330,7 @@ def _reconcile_rows(
             line_results.append(
                 {
                     "account_id": None,
+                    "claim_id": None,
                     "dos_from": billed.get("dos_from"),
                     "dos_to": billed.get("dos_to"),
                     "proc_code": billed.get("proc_code"),
@@ -336,6 +348,7 @@ def _reconcile_rows(
         line_results.append(
             {
                 "account_id": None,
+                "claim_id": None,
                 "dos_from": era.get("dos_from"),
                 "dos_to": era.get("dos_to"),
                 "proc_code": era.get("proc_code"),
@@ -348,7 +361,7 @@ def _reconcile_rows(
         )
 
     # Build claim-level rows for missing-account line-level outputs.
-    for line in [row for row in line_results if not (row.get("account_id") or "").strip()]:
+    for line in [row for row in line_results if not (row.get("claim_id") or row.get("account_id") or "").strip()]:
         billed_total = _to_decimal(line.get("billed_amount"))
         paid_total = _to_decimal(line.get("paid_amount"))
         variance_total = _to_decimal(line.get("variance_amount"))
@@ -373,6 +386,7 @@ def _reconcile_rows(
         claim_results.append(
             {
                 "account_id": None,
+                "claim_id": None,
                 "match_status": claim_status,
                 "billed_total": billed_total,
                 "paid_total": paid_total,
@@ -418,7 +432,7 @@ def _write_output_xlsx(
     ws_claim = wb.active
     ws_claim.title = "ClaimResults"
     claim_headers = [
-        "Account ID",
+        "Claim ID",
         "Match Status",
         "Billed Total",
         "Paid Total",
@@ -430,7 +444,7 @@ def _write_output_xlsx(
     for row in claim_results:
         ws_claim.append(
             [
-                row.get("account_id"),
+                row.get("claim_id") or row.get("account_id"),
                 row.get("match_status"),
                 float(row["billed_total"]) if row.get("billed_total") is not None else None,
                 float(row["paid_total"]) if row.get("paid_total") is not None else None,
@@ -442,7 +456,7 @@ def _write_output_xlsx(
 
     ws_line = wb.create_sheet("LineResults")
     line_headers = [
-        "Account ID",
+        "Claim ID",
         "DOS From",
         "DOS To",
         "Procedure",
@@ -456,7 +470,7 @@ def _write_output_xlsx(
     for row in line_results:
         ws_line.append(
             [
-                row.get("account_id"),
+                row.get("claim_id") or row.get("account_id"),
                 row["dos_from"].isoformat() if isinstance(row.get("dos_from"), date) else None,
                 row["dos_to"].isoformat() if isinstance(row.get("dos_to"), date) else None,
                 row.get("proc_code"),
@@ -522,7 +536,7 @@ def _claim_next_job_id(db: Session) -> str | None:
 def _build_claim_count(era_rows: list[dict[str, Any]], era_counters: dict[str, int]) -> int:
     keys: set[tuple[str | None, str | None]] = set()
     for row in era_rows:
-        account_id = (row.get("account_id") or "").strip() or None
+        account_id = _claim_id(row)
         claim_no = (row.get("payer_claim_number") or "").strip() or None
         if account_id or claim_no:
             keys.add((account_id, claim_no))
@@ -565,8 +579,8 @@ def _process_job(job_id: str, *, tolerance: Decimal) -> None:
         era_content, pages_era, tables_era = _analyze_pdf(client, model_id, era_path)
         billed_content, pages_billed, _tables_billed = _analyze_pdf(client, model_id, billed_path)
 
-        era_rows, era_counters = parse_era_content(era_content)
-        billed_rows, billed_counters = parse_billed_content(billed_content)
+        era_rows, era_counters = parse_era_content(era_content, job_id=job.id)
+        billed_rows, billed_counters = parse_billed_content(billed_content, billed_track="Billing")
 
         claim_results, line_results, recon_summary = _reconcile_rows(
             era_rows=era_rows,
@@ -582,15 +596,16 @@ def _process_job(job_id: str, *, tolerance: Decimal) -> None:
         era_orm_rows: list[EraLine] = []
         for row in era_rows:
             era_orm_rows.append(
-                EraLine(
-                    job_id=job.id,
-                    org_id=job.org_id,
-                    account_id=row.get("account_id"),
-                    payer_claim_number=row.get("payer_claim_number"),
-                    icn=row.get("icn"),
-                    dos_from=row.get("dos_from"),
-                    dos_to=row.get("dos_to"),
-                    proc_code=row.get("proc_code"),
+                    EraLine(
+                        job_id=job.id,
+                        org_id=job.org_id,
+                        account_id=row.get("account_id"),
+                        payer_claim_number=row.get("payer_claim_number"),
+                        icn=row.get("icn"),
+                        member_id=row.get("member_id"),
+                        dos_from=row.get("dos_from"),
+                        dos_to=row.get("dos_to"),
+                        proc_code=row.get("proc_code"),
                     units=_to_decimal(row.get("units")),
                     billed_amount=_to_decimal(row.get("billed_amount")),
                     allowed_amount=_to_decimal(row.get("allowed_amount")),
@@ -606,13 +621,14 @@ def _process_job(job_id: str, *, tolerance: Decimal) -> None:
         billed_orm_rows: list[BilledLine] = []
         for row in billed_rows:
             billed_orm_rows.append(
-                BilledLine(
-                    job_id=job.id,
-                    org_id=job.org_id,
-                    account_id=row.get("account_id"),
-                    dos_from=row.get("dos_from"),
-                    dos_to=row.get("dos_to"),
-                    proc_code=row.get("proc_code"),
+                    BilledLine(
+                        job_id=job.id,
+                        org_id=job.org_id,
+                        account_id=row.get("account_id"),
+                        member_id=row.get("member_id"),
+                        dos_from=row.get("dos_from"),
+                        dos_to=row.get("dos_to"),
+                        proc_code=row.get("proc_code"),
                     units=_to_decimal(row.get("units")),
                     billed_amount=_to_decimal(row.get("billed_amount")),
                 )

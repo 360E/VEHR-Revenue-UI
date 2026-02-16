@@ -18,6 +18,7 @@ from app.db.models.organization_membership import OrganizationMembership
 from app.db.models.recon_claim_result import ReconClaimResult
 from app.db.models.recon_import_job import ReconImportJob
 from app.db.models.recon_line_result import ReconLineResult
+from app.db.models.era_line import EraLine
 from app.db.session import get_db
 from app.services.audit import log_event
 
@@ -50,6 +51,8 @@ class ReconImportStatusResponse(BaseModel):
     underpaid_claims: int | None = None
     denied_claims: int | None = None
     needs_review_claims: int | None = None
+    distinct_member_id_count: int | None = None
+    member_id_is_useful: bool | None = None
     output_xlsx_path: str | None = None
     error_message: str | None = None
     created_at: str
@@ -60,6 +63,8 @@ class ReconImportStatusResponse(BaseModel):
 class ReconClaimResultRead(BaseModel):
     id: int
     account_id: str | None = None
+    claim_id: str | None = None
+    member_id: str | None = None
     match_status: str
     billed_total: float | None = None
     paid_total: float | None = None
@@ -71,6 +76,8 @@ class ReconClaimResultRead(BaseModel):
 class ReconLineResultRead(BaseModel):
     id: int
     account_id: str | None = None
+    claim_id: str | None = None
+    member_id: str | None = None
     dos_from: str | None = None
     dos_to: str | None = None
     proc_code: str | None = None
@@ -249,6 +256,14 @@ def get_recon_import_job(
     _: None = Depends(require_permission("billing:read")),
 ) -> ReconImportStatusResponse:
     row = _job_or_404(db, org_id=membership.organization_id, job_id=job_id)
+    distinct_member_id_count = None
+    member_id_is_useful = None
+    if row.skipped_counts_json and isinstance(row.skipped_counts_json, dict):
+        era_counts = row.skipped_counts_json.get("era") if isinstance(row.skipped_counts_json.get("era"), dict) else None
+        if isinstance(era_counts, dict):
+            distinct_member_id_count = era_counts.get("distinct_member_id_count_after")
+            if distinct_member_id_count is not None:
+                member_id_is_useful = distinct_member_id_count > 1
     return ReconImportStatusResponse(
         job_id=row.id,
         status=row.status,
@@ -265,6 +280,8 @@ def get_recon_import_job(
         underpaid_claims=row.underpaid_claims,
         denied_claims=row.denied_claims,
         needs_review_claims=row.needs_review_claims,
+        distinct_member_id_count=distinct_member_id_count,
+        member_id_is_useful=member_id_is_useful,
         output_xlsx_path=row.output_xlsx_path,
         error_message=row.error_message,
         created_at=row.created_at.isoformat(),
@@ -284,6 +301,29 @@ def get_recon_import_results(
     _: None = Depends(require_permission("billing:read")),
 ) -> dict:
     _job_or_404(db, org_id=membership.organization_id, job_id=job_id)
+    distinct_member_id_count = None
+    member_id_is_useful = False
+    if level in {"claim", "line"}:
+        job = _job_or_404(db, org_id=membership.organization_id, job_id=job_id)
+        if job.skipped_counts_json and isinstance(job.skipped_counts_json, dict):
+            era_counts = job.skipped_counts_json.get("era") if isinstance(job.skipped_counts_json.get("era"), dict) else None
+            if isinstance(era_counts, dict):
+                distinct_member_id_count = era_counts.get("distinct_member_id_count_after")
+                member_id_is_useful = bool(distinct_member_id_count and distinct_member_id_count > 1)
+
+    member_id_by_claim: dict[str, str] = {}
+    if member_id_is_useful:
+        rows = db.execute(
+            select(EraLine.account_id, EraLine.member_id)
+            .where(
+                EraLine.job_id == job_id,
+                EraLine.org_id == membership.organization_id,
+                EraLine.member_id.is_not(None),
+            )
+        ).all()
+        for account_id, member_id in rows:
+            if account_id and member_id and account_id not in member_id_by_claim:
+                member_id_by_claim[account_id] = member_id
 
     if level == "claim":
         rows = db.execute(
@@ -301,6 +341,8 @@ def get_recon_import_results(
                 ReconClaimResultRead(
                     id=row.id,
                     account_id=row.account_id,
+                    claim_id=row.account_id,
+                    member_id=member_id_by_claim.get(row.account_id) if row.account_id else None,
                     match_status=row.match_status,
                     billed_total=_as_float(row.billed_total),
                     paid_total=_as_float(row.paid_total),
@@ -337,6 +379,8 @@ def get_recon_import_results(
             ReconLineResultRead(
                 id=row.id,
                 account_id=row.account_id,
+                claim_id=row.account_id,
+                member_id=member_id_by_claim.get(row.account_id) if row.account_id else None,
                 dos_from=row.dos_from.isoformat() if row.dos_from else None,
                 dos_to=row.dos_to.isoformat() if row.dos_to else None,
                 proc_code=row.proc_code,
