@@ -837,6 +837,7 @@ def parse_era_content(
         counters["member_id_global_suppressed"] = 1
         counters["distinct_member_id_count_after"] = 0
     else:
+        counters["member_id_global_suppressed"] = 0
         counters["distinct_member_id_count_after"] = len({row.get("member_id") for row in rows if row.get("member_id")})
 
     if debug:

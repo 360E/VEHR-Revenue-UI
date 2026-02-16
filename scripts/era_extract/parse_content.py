@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Sequence, Tuple
 
@@ -17,7 +18,8 @@ def _repo_root() -> Path:
 
 def _default_out_for(label: str) -> Path:
     safe = "_".join(label.strip().split()) or "era"
-    return _repo_root() / "outputs" / "eras" / f"{safe}__content.xlsx"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return _repo_root() / "outputs" / "eras" / f"{safe}__{ts}.xlsx"
 
 
 def _load_text(path: Path) -> str:
@@ -237,7 +239,21 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     out_path = Path(args.out_xlsx) if args.out_xlsx else _default_out_for(content_label)
     sheet = "billed_lines" if args.doc_type == "billed" else "era_lines"
-    write_recon_lines_xlsx(out_path, rows, sheet_name=sheet)
+    meta = None
+    if args.doc_type == "era":
+        meta = {
+            "input_source_path": Path(args.analyze_json or args.content_txt or "").name,
+            "input_file_size_bytes": Path(args.analyze_json or args.content_txt or "").stat().st_size if (args.analyze_json or args.content_txt) else None,
+            "parser_version": "era_parser_vNEXT",
+            "distinct_claim_id_count": diag.get("distinct_claim_id_count"),
+            "distinct_patient_name_count_before": diag.get("distinct_patient_name_count_before"),
+            "distinct_patient_name_count_after": diag.get("distinct_patient_name_count_after"),
+            "distinct_member_id_count_before": diag.get("distinct_member_id_count_before"),
+            "distinct_member_id_count_after": diag.get("distinct_member_id_count_after"),
+            "patient_name_global_suppressed": diag.get("patient_name_global_suppressed"),
+            "member_id_global_suppressed": diag.get("member_id_global_suppressed"),
+        }
+    write_recon_lines_xlsx(out_path, rows, sheet_name=sheet, meta=meta)
 
     label = "billed content" if args.doc_type == "billed" else "era content"
     _print_diag(rows, diag, label=label)
@@ -248,7 +264,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "(possible context leak)"
             )
 
-    print(f"[era_extract] wrote: {out_path}")
+    print(f"[era_extract] wrote: {out_path.resolve()}")
     return 0
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -62,6 +63,7 @@ def write_recon_lines_xlsx(
     rows: Sequence[dict[str, Any]],
     *,
     sheet_name: str = "ReconLines",
+    meta: dict[str, Any] | None = None,
 ) -> None:
     """Write a single-sheet workbook for content-based ERA parsing."""
     cols = [
@@ -100,6 +102,16 @@ def write_recon_lines_xlsx(
             series = df[col].astype(str)
             max_len = max([_safe_len(col)] + [_safe_len(v) for v in series.head(500).tolist()])
             ws.column_dimensions[get_column_letter(col_idx)].width = min(max(12, max_len + 2), 60)
+
+        if meta is not None and sheet_name == "era_lines":
+            meta_rows = []
+            generated_at = datetime.now(timezone.utc).isoformat()
+            meta_payload = {"generated_at_utc": generated_at}
+            meta_payload.update(meta)
+            for key, value in meta_payload.items():
+                meta_rows.append({"key": key, "value": value})
+            meta_df = pd.DataFrame(meta_rows)
+            meta_df.to_excel(writer, index=False, sheet_name="_meta")
 
 
 def _safe_sheet_name(name: str) -> str:
