@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from app.core.env import truthy_env
 
@@ -172,6 +172,15 @@ def create_app(*, enable_startup_validation: bool = True, include_router: bool =
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def require_nexus_admin_token(request: Request, call_next):
+        if request.url.path.startswith("/api/dev/"):
+            expected = os.getenv("NEXUS_ADMIN_TOKEN", "").strip()
+            provided = request.headers.get("X-NEXUS-ADMIN-TOKEN", "").strip()
+            if not expected or provided != expected:
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        return await call_next(request)
 
     @app.middleware("http")
     async def audit_cors_preflight(request: Request, call_next):

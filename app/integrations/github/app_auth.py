@@ -43,6 +43,10 @@ def _parse_github_error(response: httpx.Response, body: Any) -> tuple[str, int]:
 
 
 def load_private_key_pem() -> str:
+    inline = os.getenv("GITHUB_APP_PRIVATE_KEY_PEM", "").strip()
+    if inline:
+        return inline
+
     path = _required_env("GITHUB_APP_PRIVATE_KEY_PATH")
     try:
         with open(path, "r", encoding="utf-8") as handle:

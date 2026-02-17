@@ -23,6 +23,22 @@ App: http://127.0.0.1:8000
 
 Swagger docs: http://127.0.0.1:8000/docs
 
+Deployment (Docker)
+Required env vars:
+- NEXUS_ADMIN_TOKEN (for /api/dev/*)
+- GITHUB_APP_ID
+- GITHUB_APP_INSTALLATION_ID
+- GITHUB_APP_PRIVATE_KEY_PEM (preferred) or GITHUB_APP_PRIVATE_KEY_PATH
+- Plus any existing required env vars documented below (RingCentral, OpenAI, storage, etc.)
+
+Example Docker run:
+docker build -t vehr-nexus .
+docker run -p 8000:8000 -e NEXUS_ADMIN_TOKEN=... -e GITHUB_APP_ID=... -e GITHUB_APP_INSTALLATION_ID=... -e GITHUB_APP_PRIVATE_KEY_PEM=... vehr-nexus
+
+Notes:
+- Set secrets using your platform's secret manager; never commit them.
+- GitHub kill switch: set CODEX_DISABLED in GitHub to stop remote runs.
+
 🧠 Core Architecture Rules (READ THIS FIRST)
 
 These rules exist to prevent circular imports and startup failures.
