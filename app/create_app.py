@@ -101,8 +101,13 @@ def _cors_origin_hosts(origins: list[str]) -> list[str]:
     return sorted(hosts)
 
 
-def _skip_startup_checks() -> bool:
-    return truthy_env("SKIP_STARTUP_CHECKS")
+def _skip_startup_checks() -> list[str]:
+    reasons: list[str] = []
+    if truthy_env("SKIP_STARTUP_CHECKS"):
+        reasons.append("SKIP_STARTUP_CHECKS=1")
+    if truthy_env("NEXUS_AGENT_MODE"):
+        reasons.append("NEXUS_AGENT_MODE=1")
+    return reasons
 
 
 def create_app(*, enable_startup_validation: bool = True, include_router: bool = True) -> FastAPI:
@@ -117,8 +122,9 @@ def create_app(*, enable_startup_validation: bool = True, include_router: bool =
         logger.info("CORS origins: %s", ",".join(cors_origins))
         logger.info("CORS origin hosts: %s", ",".join(_cors_origin_hosts(cors_origins)))
 
-        if enable_startup_validation and _skip_startup_checks():
-            logger.info("Skipping startup validation (SKIP_STARTUP_CHECKS=1)")
+        skip_reasons = _skip_startup_checks()
+        if enable_startup_validation and skip_reasons:
+            logger.info("Skipping startup validation (%s)", ", ".join(skip_reasons))
         else:
             if enable_startup_validation and include_router:
                 from app.services.ringcentral_realtime import (

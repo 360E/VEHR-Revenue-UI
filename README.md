@@ -31,6 +31,9 @@ Required env vars:
 - GITHUB_APP_PRIVATE_KEY_PEM (preferred) or GITHUB_APP_PRIVATE_KEY_PATH
 - Plus any existing required env vars documented below (RingCentral, OpenAI, storage, etc.)
 
+Render deployment (agent-only)
+Set NEXUS_AGENT_MODE=1 to skip RingCentral startup validation for AI agent workloads.
+
 Example Docker run:
 docker build -t vehr-nexus .
 docker run -p 8000:8000 -e NEXUS_ADMIN_TOKEN=... -e GITHUB_APP_ID=... -e GITHUB_APP_INSTALLATION_ID=... -e GITHUB_APP_PRIVATE_KEY_PEM=... vehr-nexus
