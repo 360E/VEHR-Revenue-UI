@@ -113,10 +113,7 @@ def _cors_origin_hosts(origins: list[str]) -> list[str]:
 
 
 def _skip_startup_checks() -> bool:
-    if truthy_env("SKIP_STARTUP_CHECKS"):
-        return True
-    env = os.getenv("ENV", "").strip().lower()
-    return env in {"dev", "local"}
+    return truthy_env("SKIP_STARTUP_CHECKS")
 
 
 @asynccontextmanager
@@ -130,7 +127,7 @@ async def lifespan(_app: FastAPI):
     logger.info("CORS origins: %s", ",".join(cors_origins))
     logger.info("CORS origin hosts: %s", ",".join(_cors_origin_hosts(cors_origins)))
     if _skip_startup_checks():
-        logger.info("Skipping startup validation (dev mode enabled)")
+        logger.info("Skipping startup validation (SKIP_STARTUP_CHECKS=1)")
     else:
         try:
             validate_ringcentral_startup_configuration()
