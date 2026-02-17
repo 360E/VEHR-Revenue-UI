@@ -16,7 +16,7 @@ from app.integrations.github.app_auth import (
     get_installation_token,
 )
 
-router = APIRouter(tags=["nexus"])
+router = APIRouter(prefix="/api/dev", tags=["nexus"])
 
 
 class CodexTaskRequest(BaseModel):
@@ -49,21 +49,23 @@ def _build_issue_body(payload: CodexTaskRequest) -> str:
     files_block = payload.files_or_area.strip() if payload.files_or_area else "Not specified"
     notes_block = payload.notes.strip() if payload.notes else "None"
     requested_by_block = payload.requested_by.strip() if payload.requested_by else "Not specified"
-    constraints_block = (
-        "- Backend-only; no OAuth callback flow.\n"
-        "- Do not print or log secrets.\n"
-        "- Do not commit keys or tokens.\n"
-        "- Nexus only creates the issue and dispatches the workflow."
-    )
+    constraints_block = "- PR only; no secrets; keep small."
 
     return (
-        f"## Goal\n{payload.goal.strip()}\n\n"
-        f"## Acceptance Criteria\n{acceptance_block}\n\n"
-        f"## Risk\n{payload.risk}\n\n"
-        f"## Files or Area\n{files_block}\n\n"
-        f"## Constraints\n{constraints_block}\n\n"
-        f"## Notes\n{notes_block}\n\n"
-        f"## Requested By\n{requested_by_block}\n"
+        "## Goal\n"
+        f"{payload.goal.strip()}\n\n"
+        "## Acceptance Criteria\n"
+        f"{acceptance_block}\n\n"
+        "## Risk\n"
+        f"{payload.risk}\n\n"
+        "## Files/Area\n"
+        f"{files_block}\n\n"
+        "## Constraints\n"
+        f"{constraints_block}\n\n"
+        "## Notes\n"
+        f"{notes_block}\n\n"
+        "## Requested By\n"
+        f"{requested_by_block}\n"
     )
 
 
@@ -74,7 +76,7 @@ def _create_issue(*, token: str, payload: CodexTaskRequest) -> dict[str, Any]:
             f"{GITHUB_API_BASE_URL}/repos/Tannrow/VEHR/issues",
             headers=_github_headers(token),
             json={
-                "title": payload.title.strip(),
+                "title": f"[AI TASK] {payload.title.strip()}",
                 "body": issue_body,
                 "labels": ["ai-task", f"risk:{payload.risk}"],
             },
