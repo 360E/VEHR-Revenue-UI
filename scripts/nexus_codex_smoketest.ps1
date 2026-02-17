@@ -5,9 +5,10 @@ param(
 
 $payload = @{
   title = "Add health endpoint"
-  goal = "Add GET /health returning {ok:true}"
+  goal  = "Add GET /health returning {ok:true}"
   acceptance_criteria = @("GET /health returns 200 and ok:true")
   risk = "low"
+  requested_by = "Tanner"
 } | ConvertTo-Json -Depth 5
 
 try {
