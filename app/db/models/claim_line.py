@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from datetime import date
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String
+from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +21,7 @@ class ClaimLine(Base):
     org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=False, index=True)
 
     cpt_code: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    dos_from: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     units: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     expected_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
 

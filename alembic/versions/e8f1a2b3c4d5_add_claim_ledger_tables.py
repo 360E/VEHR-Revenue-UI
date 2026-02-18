@@ -69,6 +69,7 @@ def upgrade() -> None:
         sa.Column("claim_id", postgresql.UUID(as_uuid=False), nullable=False),
         sa.Column("org_id", sa.String(length=36), nullable=False),
         sa.Column("cpt_code", sa.String(length=40), nullable=True),
+        sa.Column("dos_from", sa.Date(), nullable=True),
         sa.Column("units", sa.Numeric(12, 2), nullable=True),
         sa.Column("expected_amount", sa.Numeric(14, 2), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
@@ -79,6 +80,7 @@ def upgrade() -> None:
     op.create_index("ix_claim_lines_claim_id", "claim_lines", ["claim_id"], unique=False)
     op.create_index("ix_claim_lines_org_id", "claim_lines", ["org_id"], unique=False)
     op.create_index("ix_claim_lines_cpt_code", "claim_lines", ["cpt_code"], unique=False)
+    op.create_index("ix_claim_lines_dos_from", "claim_lines", ["dos_from"], unique=False)
 
     if dialect == "postgresql":
         claim_event_type.create(bind, checkfirst=True)
@@ -142,6 +144,7 @@ def downgrade() -> None:
     op.drop_table("claim_events")
 
     op.drop_index("ix_claim_lines_cpt_code", table_name="claim_lines")
+    op.drop_index("ix_claim_lines_dos_from", table_name="claim_lines")
     op.drop_index("ix_claim_lines_org_id", table_name="claim_lines")
     op.drop_index("ix_claim_lines_claim_id", table_name="claim_lines")
     op.drop_table("claim_lines")
