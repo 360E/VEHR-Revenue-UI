@@ -77,7 +77,7 @@ def _extract_date_range(text: str) -> tuple[date | None, date | None]:
 
 def _extract_account_id(block: str) -> str | None:
     explicit = re.search(
-        r"(?im)(?:Patient\s*Ctrl\s*Nmbr|ACNT|ACCT)\s*:\s*([^\n]+)",
+        r"(?im)(?:Patient\s*Ctrl\s*Nmbr|ACNT|ACCT|Account\s*(?:Number|ID|#)?)\s*:\s*([^\n]+)",
         block or "",
     )
     if not explicit:
