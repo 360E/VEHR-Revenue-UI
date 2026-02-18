@@ -5,12 +5,14 @@ import logging
 import os
 import re
 import time
+import json
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
@@ -29,6 +31,8 @@ from app.db.session import SessionLocal
 from app.services.audit import log_event
 from scripts.era_extract.content_parsers import parse_billed_content, parse_era_content
 from scripts.era_extract.docintel_client import create_document_intelligence_client, load_repo_dotenv
+from app.db.models.document_analysis import DocumentAnalysis, DocumentType
+from app.services.claim_normalizer import ClaimNormalizationError, normalize_claims_from_azure
 
 
 logger = logging.getLogger(__name__)
@@ -496,7 +500,7 @@ def _write_output_xlsx(
     return output_rel.as_posix()
 
 
-def _analyze_pdf(client: Any, model_id: str, pdf_path: Path) -> tuple[str, int, int]:
+def _analyze_pdf(client: Any, model_id: str, pdf_path: Path) -> tuple[str, int, int, dict]:
     with pdf_path.open("rb") as f:
         poller = client.begin_analyze_document(model_id=model_id, body=f)
         result = poller.result()
@@ -504,7 +508,15 @@ def _analyze_pdf(client: Any, model_id: str, pdf_path: Path) -> tuple[str, int, 
     content = (getattr(result, "content", "") or "").strip()
     pages_detected = len(list(getattr(result, "pages", []) or []))
     tables_detected = len(list(getattr(result, "tables", []) or []))
-    return content, pages_detected, tables_detected
+    raw_json: dict = {}
+    try:
+        if hasattr(result, "to_dict"):
+            raw_json = result.to_dict() or {}
+        else:
+            raw_json = json.loads(json.dumps(result, default=lambda o: o.__dict__))
+    except Exception:
+        raw_json = {"content": content}
+    return content, pages_detected, tables_detected, raw_json
 
 
 def _claim_next_job_id(db: Session) -> str | None:
@@ -576,8 +588,46 @@ def _process_job(job_id: str, *, tolerance: Decimal) -> None:
         if not era_path.exists() or not billed_path.exists():
             raise FileNotFoundError("input_pdf_missing")
 
-        era_content, pages_era, tables_era = _analyze_pdf(client, model_id, era_path)
-        billed_content, pages_billed, _tables_billed = _analyze_pdf(client, model_id, billed_path)
+        era_content, pages_era, tables_era, era_raw = _analyze_pdf(client, model_id, era_path)
+        billed_content, pages_billed, _tables_billed, billed_raw = _analyze_pdf(client, model_id, billed_path)
+
+        db.add(
+            DocumentAnalysis(
+                id=str(uuid4()),
+                org_id=job.org_id,
+                job_id=job.id,
+                document_type=DocumentType.ERA,
+                raw_json=era_raw,
+            )
+        )
+        db.add(
+            DocumentAnalysis(
+                id=str(uuid4()),
+                org_id=job.org_id,
+                job_id=job.id,
+                document_type=DocumentType.BILLED,
+                raw_json=billed_raw,
+            )
+        )
+
+        era_rows = []
+        billed_rows = []
+        era_counters: dict[str, int] = {}
+        billed_counters: dict[str, int] = {}
+
+        try:
+            normalized_era = normalize_claims_from_azure(era_raw, document_type="ERA")
+            logger.info("claim_normalizer_used document_type=ERA count=%s", len(normalized_era))
+        except ClaimNormalizationError as exc:
+            logger.warning("claim_normalizer_failed document_type=ERA reason=%s", exc)
+            normalized_era = None
+
+        try:
+            normalized_billed = normalize_claims_from_azure(billed_raw, document_type="BILLED")
+            logger.info("claim_normalizer_used document_type=BILLED count=%s", len(normalized_billed))
+        except ClaimNormalizationError as exc:
+            logger.warning("claim_normalizer_failed document_type=BILLED reason=%s", exc)
+            normalized_billed = None
 
         era_rows, era_counters = parse_era_content(era_content, job_id=job.id)
         billed_rows, billed_counters = parse_billed_content(billed_content, billed_track="Billing")
