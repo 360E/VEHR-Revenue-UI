@@ -104,22 +104,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          # retry_count starts at 0; attempt_number starts at 1
           attempt_number=$(( ${RETRY_COUNT:-0} + 1 ))
 
-          body=$(cat <<EOF
-          Codex workflow attempt ${attempt_number} failed.
+          body="Codex workflow attempt ${attempt_number} failed.
 
-          Run: ${RUN_URL}
-          EOF
-          )
+Run: ${RUN_URL}"
 
           api="https://api.github.com/repos/${REPO}/issues/${ISSUE_NUMBER}/comments"
-          payload=$(python - <<PY
-          import json, sys
-          print(json.dumps({"body": sys.stdin.read()}))
-PY
-          <<<"$body")
+          payload=$(jq -n --arg body "$body" '{body:$body}')
 
           curl -sS -X POST \
             -H "Authorization: Bearer ${GH_TOKEN}" \
