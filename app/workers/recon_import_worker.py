@@ -35,8 +35,9 @@ from app.db.models.document_analysis import DocumentAnalysis, DocumentType
 from app.db.models.claim import Claim
 from app.db.models.claim_line import ClaimLine
 from app.db.models.claim_event import ClaimEvent, ClaimEventType
-from app.db.models.claim_ledger import ClaimLedger, ClaimLedgerStatus
-from app.services.claim_normalizer import ClaimNormalizationError, normalize_claims_from_azure
+from app.db.models.claim_ledger import ClaimLedger
+from app.services.claim_ledger_service import ClaimLedgerService
+from app.services.claim_normalizer import ClaimNormalizer
 
 
 logger = logging.getLogger(__name__)
@@ -636,10 +637,12 @@ def _get_or_create_claim_line(
             dos_from=dos_from,
         )
     row.units = _to_decimal(line.get("units"))
+    row.billed_amount = _to_decimal(line.get("billed_amount"))
     if document_type == "BILLED":
         row.expected_amount = _to_decimal(line.get("billed_amount"))
     db.add(row)
     db.flush()
+    ClaimLedgerService.compute_for_claim(db, claim_id)
     return row
 
 
@@ -651,196 +654,115 @@ def _insert_claim_events_from_normalized(
     document_type: str,
     source_job_id: str,
 ) -> None:
+    lines = claim_payload.get("lines") or []
     base_event_type = ClaimEventType.SERVICE_RECORDED if document_type == "BILLED" else ClaimEventType.ERA_RECEIVED
-    should_add_base_event = True
-    if document_type == "BILLED":
-        existing_service = db.execute(
-            select(ClaimEvent).where(
-                ClaimEvent.claim_id == claim_row.id,
-                ClaimEvent.event_type == ClaimEventType.SERVICE_RECORDED,
-                ClaimEvent.source_job_id == source_job_id,
-            )
-        ).scalar_one_or_none()
-        if existing_service:
-            should_add_base_event = False
-    if should_add_base_event:
+    allowed_total = Decimal("0")
+    adjustment_total = Decimal("0")
+    payment_total = Decimal("0")
+    has_denial = False
+
+    for line in lines:
+        paid = _to_decimal(line.get("paid_amount")) or Decimal("0")
+        allowed = _to_decimal(line.get("allowed_amount")) or Decimal("0")
+        adjustments = line.get("adjustments") or []
+        line_adj_total = Decimal("0")
+        for adj in adjustments:
+            line_adj_total += _to_decimal(adj.get("amount")) or Decimal("0")
+        if paid == 0 and line_adj_total > 0:
+            has_denial = True
+
+        allowed_total += allowed
+        payment_total += paid
+        adjustment_total += line_adj_total
+
+    base_event = db.execute(
+        select(ClaimEvent).where(
+            ClaimEvent.claim_id == claim_row.id,
+            ClaimEvent.event_type == base_event_type,
+            ClaimEvent.job_id == source_job_id,
+        )
+    ).scalar_one_or_none()
+    if base_event is None:
         base_event = ClaimEvent(
             id=str(uuid4()),
             claim_id=claim_row.id,
             org_id=claim_row.org_id,
             event_type=base_event_type,
             event_date=_parse_date(claim_payload.get("dos_from")),
+            job_id=source_job_id,
             source_job_id=source_job_id,
             raw_json=claim_payload,
         )
-        db.add(base_event)
-    lines = claim_payload.get("lines") or []
-    existing_service_keys: set[tuple[str | None, date | None, str | None]] = set()
-    prior_service_keys_other_jobs: set[tuple[str | None, date | None, str | None]] = set()
-    if document_type == "BILLED":
-        for ev in db.execute(
+    if base_event_type == ClaimEventType.ERA_RECEIVED:
+        base_event.amount = allowed_total
+    db.add(base_event)
+
+    if payment_total > 0:
+        payment_event = db.execute(
             select(ClaimEvent).where(
                 ClaimEvent.claim_id == claim_row.id,
-                ClaimEvent.event_type == ClaimEventType.SERVICE_RECORDED,
+                ClaimEvent.event_type == ClaimEventType.PAYMENT,
+                ClaimEvent.job_id == source_job_id,
             )
-        ).scalars():
-            try:
-                payload = ev.raw_json or {}
-            except Exception:
-                payload = {}
-            ev_lines = payload.get("lines") if isinstance(payload, dict) else None
-            ev_lines = ev_lines if isinstance(ev_lines, list) else [payload]
-            for ln in ev_lines:
-                if not isinstance(ln, dict):
-                    continue
-                key = (
-                    (ln.get("cpt_code") or "").strip() or None,
-                    _parse_date(ln.get("dos_from")),
-                    ev.source_job_id,
-                )
-                existing_service_keys.add(key)
-                if ev.source_job_id != source_job_id:
-                    prior_service_keys_other_jobs.add((key[0], key[1], None))
-
-    for line in lines:
-        paid = _to_decimal(line.get("paid_amount"))
-        adjustments = line.get("adjustments") or []
-        has_denial_adjust = bool(adjustments) and paid in {None, Decimal("0")}
-        if document_type == "BILLED":
-            service_key = ((line.get("cpt_code") or "").strip() or None, _parse_date(line.get("dos_from")), source_job_id)
-            service_key_any_job = (service_key[0], service_key[1], None)
-            if service_key in existing_service_keys:
-                continue
-            if service_key_any_job in prior_service_keys_other_jobs:
-                claim_row.resubmission_count = (claim_row.resubmission_count or 0) + 1
-
-        if paid and paid > 0:
-            db.add(
-                ClaimEvent(
-                    id=str(uuid4()),
-                    claim_id=claim_row.id,
-                    org_id=claim_row.org_id,
-                    event_type=ClaimEventType.PAYMENT,
-                    event_date=_parse_date(line.get("dos_from")) or _parse_date(claim_payload.get("dos_from")),
-                    source_job_id=source_job_id,
-                    raw_json=line,
-                )
+        ).scalar_one_or_none()
+        if payment_event is None:
+            payment_event = ClaimEvent(
+                id=str(uuid4()),
+                claim_id=claim_row.id,
+                org_id=claim_row.org_id,
+                event_type=ClaimEventType.PAYMENT,
+                job_id=source_job_id,
+                source_job_id=source_job_id,
             )
-        if has_denial_adjust:
-            db.add(
-                ClaimEvent(
-                    id=str(uuid4()),
-                    claim_id=claim_row.id,
-                    org_id=claim_row.org_id,
-                    event_type=ClaimEventType.DENIAL,
-                    event_date=_parse_date(line.get("dos_from")) or _parse_date(claim_payload.get("dos_from")),
-                    source_job_id=source_job_id,
-                    raw_json=line,
-                )
+        payment_event.amount = payment_total
+        payment_event.event_date = _parse_date(claim_payload.get("dos_from"))
+        payment_event.raw_json = claim_payload
+        db.add(payment_event)
+
+    if has_denial:
+        denial_event = db.execute(
+            select(ClaimEvent).where(
+                ClaimEvent.claim_id == claim_row.id,
+                ClaimEvent.event_type == ClaimEventType.DENIAL,
+                ClaimEvent.job_id == source_job_id,
             )
-        if adjustments:
-            db.add(
-                ClaimEvent(
-                    id=str(uuid4()),
-                    claim_id=claim_row.id,
-                    org_id=claim_row.org_id,
-                    event_type=ClaimEventType.ADJUSTMENT,
-                    event_date=_parse_date(line.get("dos_from")) or _parse_date(claim_payload.get("dos_from")),
-                    source_job_id=source_job_id,
-                    raw_json=line,
-                )
+        ).scalar_one_or_none()
+        if denial_event is None:
+            denial_event = ClaimEvent(
+                id=str(uuid4()),
+                claim_id=claim_row.id,
+                org_id=claim_row.org_id,
+                event_type=ClaimEventType.DENIAL,
+                job_id=source_job_id,
+                source_job_id=source_job_id,
             )
+        denial_event.event_date = _parse_date(claim_payload.get("dos_from"))
+        denial_event.raw_json = claim_payload
+        db.add(denial_event)
 
-
-def compute_claim_ledger(db: Session, *, claim_row: Claim) -> None:
-    events = (
-        db.execute(
-            select(ClaimEvent).where(ClaimEvent.claim_id == claim_row.id).order_by(ClaimEvent.created_at.asc())
-        )
-        .scalars()
-        .all()
-    )
-    total_billed = Decimal("0")
-    total_paid = Decimal("0")
-    total_allowed = Decimal("0")
-    total_adjusted = Decimal("0")
-    last_event_date = None
-
-    for ev in events:
-        try:
-            payload = ev.raw_json or {}
-        except Exception:
-            payload = {}
-        if isinstance(payload, dict) and "lines" in payload and isinstance(payload.get("lines"), list):
-            lines_iter = payload.get("lines") or []
-        else:
-            lines_iter = [payload]
-        for ln in lines_iter:
-            if not isinstance(ln, dict):
-                continue
-            billed = _to_decimal(ln.get("billed_amount"))
-            allowed = _to_decimal(ln.get("allowed_amount"))
-            paid = _to_decimal(ln.get("paid_amount"))
-            adj_total = Decimal("0")
-            for adj in ln.get("adjustments") or []:
-                amt = _to_decimal(adj.get("amount"))
-                adj_total += amt or Decimal("0")
-            if ev.event_type == ClaimEventType.SERVICE_RECORDED:
-                if billed is not None:
-                    total_billed += billed
-            if ev.event_type == ClaimEventType.ERA_RECEIVED:
-                if allowed is not None:
-                    total_allowed += allowed
-                if paid is not None:
-                    total_paid += paid
-                total_adjusted += adj_total
-            if ev.event_type == ClaimEventType.PAYMENT and paid is not None:
-                total_paid += paid
-            if ev.event_type == ClaimEventType.ADJUSTMENT:
-                total_adjusted += adj_total
-        if ev.event_date:
-            last_event_date = ev.event_date if last_event_date is None or ev.event_date > last_event_date else last_event_date
-
-    variance = (total_paid + total_adjusted) - total_billed
-    status = ClaimLedgerStatus.NOT_BILLED
-    tolerance = Decimal("0.01")
-    if total_billed > 0 and total_paid == 0 and total_adjusted == 0:
-        status = ClaimLedgerStatus.BILLED_NO_RESPONSE
-    elif total_paid == 0 and total_adjusted > 0:
-        status = ClaimLedgerStatus.DENIED
-    elif total_billed > 0 and variance > tolerance:
-        status = ClaimLedgerStatus.OVERPAID
-    elif total_billed > 0 and abs(variance) <= tolerance:
-        status = ClaimLedgerStatus.PAID_IN_FULL
-    elif total_paid > 0:
-        status = ClaimLedgerStatus.PARTIAL_PAYMENT
-
-    aging_days = None
-    if claim_row.dos_from and last_event_date:
-        try:
-            aging_days = max((last_event_date - claim_row.dos_from).days, 0)
-        except Exception:
-            aging_days = None
-
-    ledger = (
-        db.execute(select(ClaimLedger).where(ClaimLedger.claim_id == claim_row.id)).scalar_one_or_none()
-    )
-    if ledger is None:
-        ledger = ClaimLedger(
-            id=str(uuid4()),
-            claim_id=claim_row.id,
-            org_id=claim_row.org_id,
-        )
-    ledger.total_billed = total_billed
-    ledger.total_paid = total_paid
-    ledger.total_allowed = total_allowed
-    ledger.total_adjusted = total_adjusted
-    ledger.variance = variance
-    ledger.status = status
-    ledger.aging_days = aging_days
-    ledger.last_event_date = last_event_date
-    db.add(ledger)
+    if adjustment_total > 0:
+        adjustment_event = db.execute(
+            select(ClaimEvent).where(
+                ClaimEvent.claim_id == claim_row.id,
+                ClaimEvent.event_type == ClaimEventType.ADJUSTMENT,
+                ClaimEvent.job_id == source_job_id,
+            )
+        ).scalar_one_or_none()
+        if adjustment_event is None:
+            adjustment_event = ClaimEvent(
+                id=str(uuid4()),
+                claim_id=claim_row.id,
+                org_id=claim_row.org_id,
+                event_type=ClaimEventType.ADJUSTMENT,
+                job_id=source_job_id,
+                source_job_id=source_job_id,
+            )
+        adjustment_event.amount = adjustment_total
+        adjustment_event.event_date = _parse_date(claim_payload.get("dos_from"))
+        adjustment_event.raw_json = claim_payload
+        db.add(adjustment_event)
     db.flush()
+    ClaimLedgerService.compute_for_claim(db, claim_row.id)
 
 
 def _process_job(job_id: str, *, tolerance: Decimal) -> None:
@@ -900,20 +822,23 @@ def _process_job(job_id: str, *, tolerance: Decimal) -> None:
         billed_rows: list[dict[str, Any]] = []
         era_counters: dict[str, int] = {}
         billed_counters: dict[str, int] = {}
+        normalizer = ClaimNormalizer()
+        normalized_era = None
+        normalized_billed = None
 
         try:
-            normalized_era = normalize_claims_from_azure(era_raw, document_type="ERA")
+            normalized_era_payload = normalizer.normalize(era_raw)
+            normalized_era = [normalized_era_payload]
             logger.info("claim_normalizer_used document_type=ERA count=%s", len(normalized_era))
-        except ClaimNormalizationError as exc:
+        except ValueError as exc:
             logger.warning("claim_normalizer_failed document_type=ERA reason=%s", exc)
-            normalized_era = None
 
         try:
-            normalized_billed = normalize_claims_from_azure(billed_raw, document_type="BILLED")
+            normalized_billed_payload = normalizer.normalize(billed_raw)
+            normalized_billed = [normalized_billed_payload]
             logger.info("claim_normalizer_used document_type=BILLED count=%s", len(normalized_billed))
-        except ClaimNormalizationError as exc:
+        except ValueError as exc:
             logger.warning("claim_normalizer_failed document_type=BILLED reason=%s", exc)
-            normalized_billed = None
 
         if normalized_billed:
             for claim in normalized_billed:
@@ -935,7 +860,6 @@ def _process_job(job_id: str, *, tolerance: Decimal) -> None:
                     document_type="BILLED",
                     source_job_id=job.id,
                 )
-                compute_claim_ledger(db, claim_row=claim_row)
 
         if normalized_era:
             for claim in normalized_era:
@@ -957,7 +881,6 @@ def _process_job(job_id: str, *, tolerance: Decimal) -> None:
                     document_type="ERA",
                     source_job_id=job.id,
                 )
-                compute_claim_ledger(db, claim_row=claim_row)
 
         era_rows, era_counters = parse_era_content(era_content, job_id=job.id)
         billed_rows, billed_counters = parse_billed_content(billed_content, billed_track="Billing")

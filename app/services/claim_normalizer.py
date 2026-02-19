@@ -1,99 +1,70 @@
 from __future__ import annotations
 
-import json
-import os
+from copy import deepcopy
 from typing import Any
 
-import httpx
+from app.db.models.claim import ClaimStatus
+from app.db.models.claim_event import ClaimEventType
 
 
-class ClaimNormalizationError(RuntimeError):
-    pass
+class ClaimNormalizer:
+    REQUIRED_ROOT_KEYS = {"claim", "lines", "events"}
+    REQUIRED_CLAIM_KEYS = {"org_id"}
+    REQUIRED_LINE_KEYS = {"billed_amount"}
+    REQUIRED_EVENT_KEYS = {"event_type"}
 
+    def normalize(self, raw_json: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(raw_json, dict):
+            raise ValueError("raw_json must be a dict")
+        missing_root = self.REQUIRED_ROOT_KEYS - set(raw_json.keys())
+        if missing_root:
+            raise ValueError(f"Missing required keys: {', '.join(sorted(missing_root))}")
 
-def _load_azure_openai_config() -> dict[str, str]:
-    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
-    key = os.getenv("AZURE_OPENAI_KEY", "").strip()
-    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "").strip()
-    api_version = os.getenv("AZURE_OPENAI_API_VERSION", "").strip() or "2024-08-01-preview"
+        claim_payload = deepcopy(raw_json.get("claim"))
+        lines_payload = deepcopy(raw_json.get("lines"))
+        events_payload = deepcopy(raw_json.get("events"))
 
-    missing = [name for name, value in [("AZURE_OPENAI_ENDPOINT", endpoint), ("AZURE_OPENAI_KEY", key), ("AZURE_OPENAI_DEPLOYMENT", deployment)] if not value]
-    if missing:
-        raise ClaimNormalizationError(f"Azure OpenAI config missing: {', '.join(missing)}")
+        if not isinstance(claim_payload, dict):
+            raise ValueError("claim must be a dict")
+        if not isinstance(lines_payload, list):
+            raise ValueError("lines must be a list")
+        if not isinstance(events_payload, list):
+            raise ValueError("events must be a list")
 
-    return {
-        "endpoint": endpoint.rstrip("/"),
-        "key": key,
-        "deployment": deployment,
-        "api_version": api_version,
-    }
+        missing_claim = self.REQUIRED_CLAIM_KEYS - set(claim_payload.keys())
+        if missing_claim:
+            raise ValueError(f"claim missing required keys: {', '.join(sorted(missing_claim))}")
 
+        if "status" in claim_payload and claim_payload["status"] is not None:
+            try:
+                ClaimStatus(claim_payload["status"])
+            except ValueError as exc:
+                raise ValueError("claim.status must be a valid ClaimStatus") from exc
 
-def normalize_claims_from_azure(azure_json: dict[str, Any], document_type: str) -> list[dict[str, Any]]:
-    if not isinstance(azure_json, dict):
-        raise ClaimNormalizationError("azure_json must be a dict")
-    cfg = _load_azure_openai_config()
+        normalized_lines: list[dict[str, Any]] = []
+        for line in lines_payload:
+            if not isinstance(line, dict):
+                raise ValueError("each line must be a dict")
+            missing_line = self.REQUIRED_LINE_KEYS - set(line.keys())
+            if missing_line:
+                raise ValueError(f"line missing required keys: {', '.join(sorted(missing_line))}")
+            normalized_lines.append(deepcopy(line))
 
-    url = f"{cfg['endpoint']}/openai/deployments/{cfg['deployment']}/chat/completions"
-    params = {"api-version": cfg["api_version"]}
+        normalized_events: list[dict[str, Any]] = []
+        for event in events_payload:
+            if not isinstance(event, dict):
+                raise ValueError("each event must be a dict")
+            missing_event = self.REQUIRED_EVENT_KEYS - set(event.keys())
+            if missing_event:
+                raise ValueError(f"event missing required keys: {', '.join(sorted(missing_event))}")
+            try:
+                ClaimEventType(event["event_type"])
+            except ValueError as exc:
+                raise ValueError("event.event_type must be a valid ClaimEventType") from exc
+            normalized_events.append(deepcopy(event))
 
-    system_prompt = (
-        "You normalize healthcare claims extracted from Azure Document Intelligence. "
-        "Return strict JSON matching the schema. "
-        "Never include PHI beyond what is provided. "
-        "Schema: list of claims with external_claim_id, patient_name, member_id, payer_name, dos_from, dos_to, "
-        "and lines[{cpt_code, units, billed_amount, allowed_amount, paid_amount, adjustments[{code, amount}]}]. "
-        "Dates must be YYYY-MM-DD or null. Numeric fields may be null."
-    )
-
-    user_payload = {
-        "document_type": document_type,
-        "azure_document_intelligence": azure_json,
-    }
-
-    body = {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(user_payload)},
-        ],
-        "temperature": 0,
-        "response_format": {"type": "json_object"},
-    }
-    headers = {
-        "api-key": cfg["key"],
-        "Content-Type": "application/json",
-    }
-
-    try:
-        with httpx.Client(timeout=60) as client:
-            resp = client.post(url, params=params, headers=headers, json=body)
-    except Exception as exc:
-        raise ClaimNormalizationError(f"Azure OpenAI request failed: {exc}")
-
-    if resp.status_code >= 400:
-        raise ClaimNormalizationError(f"Azure OpenAI HTTP {resp.status_code}")
-
-    try:
-        payload = resp.json()
-        content = (
-            payload.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-        )
-    except Exception as exc:
-        raise ClaimNormalizationError(f"Invalid Azure OpenAI response: {exc}")
-
-    if not content:
-        raise ClaimNormalizationError("Azure OpenAI returned empty content")
-
-    try:
-        parsed = json.loads(content)
-    except Exception as exc:
-        raise ClaimNormalizationError(f"Failed to parse normalized claims JSON: {exc}")
-
-    claims = parsed
-    if isinstance(parsed, dict) and "claims" in parsed:
-        claims = parsed.get("claims")
-    if not isinstance(claims, list):
-        raise ClaimNormalizationError("Normalized claims must be a list")
-    return claims
+        return {
+            "claim": deepcopy(claim_payload),
+            "lines": normalized_lines,
+            "events": normalized_events,
+        }
