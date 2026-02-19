@@ -75,3 +75,4 @@ from app.db.models.scribe_transcript import ScribeTranscript  # noqa: F401
 from app.db.models.webhook_delivery import WebhookDelivery  # noqa: F401
 from app.db.models.webhook_endpoint import WebhookEndpoint  # noqa: F401
 from app.db.models.document_analysis import DocumentAnalysis  # noqa: F401
+from app.db.models.pdf_template_registry import PdfTemplateRegistry  # noqa: F401
