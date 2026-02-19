@@ -1,9 +1,14 @@
 name: Backend Tests (Postgres)
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main]
+
+concurrency:
+  group: backend-tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -27,6 +32,7 @@ jobs:
 
     env:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/vehr_test
+      PYTHONPATH: .
 
     steps:
       - name: Checkout
@@ -56,8 +62,13 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install "psycopg[binary]" pytest
+          if [[ -f "requirements.txt" ]]; then
+            pip install -r requirements.txt
+          else
+            echo "requirements.txt not found at repo root. Update workflow to install backend deps correctly." >&2
+            exit 1
+          fi
+          pip install "psycopg[binary]" pytest alembic
 
       - name: Wait for Postgres
         shell: bash
@@ -79,10 +90,18 @@ PY
           echo "Postgres did not become ready in time" >&2
           exit 1
 
-      - name: Run Alembic migrations
+      - name: Run Alembic migrations (upgrade)
         shell: bash
         run: |
           set -euo pipefail
+          alembic upgrade head
+
+      - name: Run Alembic migrations (downgrade -> upgrade)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # If your project does not support full downgrades, you can remove this step.
+          alembic downgrade base
           alembic upgrade head
 
       - name: Run tests
