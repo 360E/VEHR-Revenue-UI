@@ -98,12 +98,12 @@ export default function BillingPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="bg-white shadow-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xl text-slate-900">ERA Import</CardTitle>
+            <CardTitle className="text-xl text-slate-900">ERA Intake</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 pt-0 text-sm text-slate-600">
-            Upload ERA and billed claims PDFs to reconcile in one pass.
+            Upload ERA PDFs and work prioritized items in the new intake flow.
             <Button asChild variant="outline">
-              <Link href="/billing/era-import">Open full import page</Link>
+              <Link href="/revenue/era-intake">Open ERA Intake</Link>
             </Button>
           </CardContent>
         </Card>

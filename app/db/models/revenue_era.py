@@ -78,6 +78,11 @@ class RevenueEraFile(Base):
         back_populates="era_file",
         cascade="all, delete-orphan",
     )
+    processing_logs: Mapped[list["RevenueEraProcessingLog"]] = relationship(
+        "RevenueEraProcessingLog",
+        back_populates="era_file",
+        cascade="all, delete-orphan",
+    )
 
 
 class RevenueEraExtractResult(Base):
@@ -126,6 +131,28 @@ class RevenueEraStructuredResult(Base):
     )
 
     era_file: Mapped[RevenueEraFile] = relationship("RevenueEraFile", back_populates="structured_results")
+
+
+class RevenueEraProcessingLog(Base):
+    __tablename__ = "revenue_era_processing_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    era_file_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("revenue_era_files.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    stage: Mapped[str] = mapped_column(String(50), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=expression.text("CURRENT_TIMESTAMP"),
+    )
+
+    era_file: Mapped[RevenueEraFile] = relationship("RevenueEraFile", back_populates="processing_logs")
 
 
 class RevenueEraClaimLine(Base):

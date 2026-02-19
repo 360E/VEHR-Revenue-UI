@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
@@ -13,7 +14,12 @@ from app.core.security import create_access_token, hash_password
 from app.db.base import Base
 from app.db.models.organization import Organization
 from app.db.models.organization_membership import OrganizationMembership
-from app.db.models.revenue_era import RevenueEraClaimLine, RevenueEraFile, RevenueEraWorkItem
+from app.db.models.revenue_era import (
+    RevenueEraClaimLine,
+    RevenueEraFile,
+    RevenueEraProcessingLog,
+    RevenueEraWorkItem,
+)
 from app.db.models.user import User
 from app.db.session import get_db
 from app.main import app
@@ -158,6 +164,13 @@ def test_process_pipeline_creates_claims_and_worklist(tmp_path, monkeypatch) -> 
             )
             assert len(worklist) == 1
             assert worklist[0].type == "UNDERPAYMENT"
+            logs = (
+                db.execute(select(RevenueEraProcessingLog).where(RevenueEraProcessingLog.era_file_id == era_id))
+                .scalars()
+                .all()
+            )
+            stages = {log.stage for log in logs}
+            assert {"extraction", "structuring", "normalization"} <= stages
     finally:
         app.dependency_overrides.clear()
 
@@ -206,5 +219,93 @@ def test_structuring_failure_sets_error_status(tmp_path, monkeypatch) -> None:
                 .all()
             )
             assert not worklist
+            logs = (
+                db.execute(select(RevenueEraProcessingLog).where(RevenueEraProcessingLog.era_file_id == era_id))
+                .scalars()
+                .all()
+            )
+            assert any(log.stage == "error" for log in logs)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_validation_failure_sets_error_status_and_logs(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, _ = _seed_admin(session_factory)
+
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(revenue_era, "run_doc_intel", lambda path: {"model_id": "x", "extracted": {"ok": True}})
+
+    bad_payload = {"payer_name": "Payer", "claim_lines": [{"claim_ref": "CLM123", "patient_name": "Name"}]}
+    try:
+        RevenueEraStructuredV1.model_validate(bad_payload)
+    except ValidationError as exc:
+        validation_error = exc
+    else:  # pragma: no cover - guardrail
+        raise AssertionError("Expected validation error")
+
+    def _raise_validation(_payload: dict[str, str]) -> RevenueEraStructuredV1:
+        raise validation_error
+
+    monkeypatch.setattr(revenue_era, "run_structuring_llm", _raise_validation)
+
+    try:
+        with TestClient(app) as client:
+            files = [("files", ("era.pdf", b"%PDF-1.4 era", "application/pdf"))]
+            upload = client.post(
+                "/api/v1/revenue/era-pdfs/upload",
+                files=files,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert upload.status_code == 200
+            era_id = upload.json()[0]["id"]
+
+            process = client.post(
+                f"/api/v1/revenue/era-pdfs/{era_id}/process",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert process.status_code == 422
+
+        with session_factory() as db:
+            file_row = db.get(RevenueEraFile, era_id)
+            assert file_row.status == STATUS_ERROR
+            assert (
+                db.execute(select(RevenueEraClaimLine).where(RevenueEraClaimLine.era_file_id == era_id))
+                .scalars()
+                .all()
+                == []
+            )
+            assert (
+                db.execute(select(RevenueEraWorkItem).where(RevenueEraWorkItem.era_file_id == era_id))
+                .scalars()
+                .all()
+                == []
+            )
+            logs = (
+                db.execute(select(RevenueEraProcessingLog).where(RevenueEraProcessingLog.era_file_id == era_id))
+                .scalars()
+                .all()
+            )
+            assert any(log.stage == "validation" for log in logs)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_legacy_latest_endpoint_returns_deprecation(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, _ = _seed_admin(session_factory)
+
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/v1/billing/recon/import/latest",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert response.status_code == 200
+            body = response.json()
+            assert body["status"] == "deprecated"
+            assert "ERA Intake" in body["message"]
     finally:
         app.dependency_overrides.clear()

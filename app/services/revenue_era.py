@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status, UploadFile
 from openai import AzureOpenAI
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,7 @@ from app.db.models.revenue_era import (
     RevenueEraClaimLine,
     RevenueEraExtractResult,
     RevenueEraFile,
+    RevenueEraProcessingLog,
     RevenueEraStructuredResult,
     RevenueEraWorkItem,
 )
@@ -45,6 +46,30 @@ WORKITEM_TYPE_REVIEW = "REVIEW_REQUIRED"
 PROMPT_VERSION = "era_structured_v1"
 
 _ALLOWED_PDF_TYPES = {"application/pdf", "application/octet-stream"}
+_FORBIDDEN_PHI_KEYS = {
+    "patient",
+    "patient_name",
+    "patient_id",
+    "member",
+    "member_name",
+    "member_id",
+    "subscriber_name",
+    "dob",
+    "date_of_birth",
+    "ssn",
+}
+
+
+def summarize_validation_error(exc: ValidationError) -> str:
+    parts: list[str] = []
+    for err in exc.errors():
+        loc = ".".join(str(segment) for segment in err.get("loc", ()))
+        msg = err.get("msg", "")
+        if loc and msg:
+            parts.append(f"{loc}: {msg}")
+        elif msg:
+            parts.append(msg)
+    return "; ".join(parts) if parts else "validation_failed"
 
 
 class RevenueEraAdjustment(BaseModel):
@@ -99,6 +124,22 @@ class RevenueEraStructuredV1(BaseModel):
     claim_lines: list[RevenueEraStructuredLine]
 
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_phi_keys(cls, value: Any) -> Any:
+        def _check(obj: Any) -> None:
+            if isinstance(obj, dict):
+                for key, val in obj.items():
+                    if key and key.lower() in _FORBIDDEN_PHI_KEYS:
+                        raise ValueError(f"forbidden key: {key}")
+                    _check(val)
+            elif isinstance(obj, list):
+                for item in obj:
+                    _check(item)
+
+        _check(value)
+        return value
 
 
 def _repo_root() -> Path:
@@ -174,11 +215,19 @@ def _remove_phi(extracted: dict[str, Any]) -> dict[str, Any]:
     """
     Redact patient_name-like keys from extracted payload.
     """
+
     def _clean(obj: Any) -> Any:
         if isinstance(obj, dict):
             cleaned = {}
             for key, value in obj.items():
-                if key.lower() in {"patient_name", "patient", "member_name"}:
+                if key.lower() in {
+                    "patient_name",
+                    "patient",
+                    "member_name",
+                    "member_id",
+                    "patient_id",
+                    "subscriber_name",
+                }:
                     continue
                 cleaned[key] = _clean(value)
             return cleaned
@@ -261,7 +310,9 @@ def run_structuring_llm(extracted_json: dict[str, Any]) -> RevenueEraStructuredV
         raise RuntimeError("Azure OpenAI returned invalid JSON") from exc
     try:
         return RevenueEraStructuredV1.model_validate(parsed)
-    except ValidationError as exc:
+    except ValidationError:
+        raise
+    except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"Structured schema validation failed: {exc}") from exc
 
 
@@ -277,7 +328,7 @@ def normalize_structured(
     *,
     era_file: RevenueEraFile,
     structured: RevenueEraStructuredV1,
-) -> None:
+) -> tuple[int, int]:
     db.execute(delete(RevenueEraWorkItem).where(RevenueEraWorkItem.era_file_id == era_file.id))
     db.execute(delete(RevenueEraClaimLine).where(RevenueEraClaimLine.era_file_id == era_file.id))
 
@@ -341,6 +392,7 @@ def normalize_structured(
 
     db.add_all(work_records)
     db.flush()
+    return len(line_records), len(work_records)
 
 
 def log_attempt(db: Session, *, organization_id: str, actor: str, era_file_id: str, action: str) -> None:
@@ -356,3 +408,17 @@ def log_attempt(db: Session, *, organization_id: str, actor: str, era_file_id: s
     except Exception:
         # Avoid blocking flow on audit failures; upstream logging already persists attempts.
         pass
+
+
+def record_processing_log(db: Session, *, era_file_id: str, stage: str, message: str) -> None:
+    try:
+        log = RevenueEraProcessingLog(
+            id=str(uuid4()),
+            era_file_id=era_file_id,
+            stage=stage[:50],
+            message=(message or "")[:500],
+        )
+        db.add(log)
+        db.commit()
+    except Exception:
+        db.rollback()
