@@ -1,0 +1,92 @@
+name: Backend Tests (Postgres)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vehr_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vehr_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/vehr_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Validate DATABASE_URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${DATABASE_URL:-}" ]]; then
+            echo "DATABASE_URL is required" >&2
+            exit 1
+          fi
+          if [[ "${DATABASE_URL}" != postgresql+psycopg://* ]]; then
+            echo "DATABASE_URL must start with postgresql+psycopg:// (Postgres-only enforcement)" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "psycopg[binary]" pytest
+
+      - name: Wait for Postgres
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..30}; do
+            if python - <<'PY'
+import os
+import psycopg
+psycopg.connect(os.environ["DATABASE_URL"]).close()
+print("ok")
+PY
+            then
+              exit 0
+            fi
+            echo "Postgres not ready yet... ($i/30)"
+            sleep 2
+          done
+          echo "Postgres did not become ready in time" >&2
+          exit 1
+
+      - name: Run Alembic migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          alembic upgrade head
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q
