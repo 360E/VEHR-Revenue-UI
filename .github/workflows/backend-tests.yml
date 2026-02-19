@@ -48,14 +48,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${DATABASE_URL:-}" ]]; then
-            echo "DATABASE_URL is required" >&2
-            exit 1
-          fi
-          if [[ "${DATABASE_URL}" != postgresql+psycopg://* ]]; then
-            echo "DATABASE_URL must start with postgresql+psycopg:// (Postgres-only enforcement)" >&2
-            exit 1
-          fi
+          test -n "${DATABASE_URL:-}" || (echo "DATABASE_URL is required" >&2; exit 1)
+          case "$DATABASE_URL" in
+            postgresql+psycopg://*) ;;
+            *) echo "DATABASE_URL must start with postgresql+psycopg:// (Postgres-only enforcement)" >&2; exit 1 ;;
+          esac
 
       - name: Install dependencies
         shell: bash
@@ -70,21 +67,12 @@ jobs:
           fi
           pip install "psycopg[binary]" pytest alembic
 
-      - name: Wait for Postgres
+      - name: Wait for Postgres (no heredoc)
         shell: bash
         run: |
           set -euo pipefail
           for i in {1..30}; do
-            if python - <<'PY'
-import os
-import psycopg
-
-psycopg.connect(os.environ["DATABASE_URL"]).close()
-print("ok")
-PY
-            then
-              exit 0
-            fi
+            python -c 'import os, psycopg; psycopg.connect(os.environ["DATABASE_URL"]).close(); print("ok")' && exit 0
             echo "Postgres not ready yet... ($i/30)"
             sleep 2
           done
@@ -95,14 +83,6 @@ PY
         shell: bash
         run: |
           set -euo pipefail
-          alembic upgrade head
-
-      - name: Run Alembic migrations (downgrade -> upgrade)
-        shell: bash
-        run: |
-          set -euo pipefail
-          # If your project does not support full downgrades, you can remove this step.
-          alembic downgrade base
           alembic upgrade head
 
       - name: Run tests
