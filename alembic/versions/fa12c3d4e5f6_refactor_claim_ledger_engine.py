@@ -1,7 +1,7 @@
 """refactor claim ledger engine and enums
 
 Revision ID: fa12c3d4e5f6
-Revises: ea1b2c3d4e6b
+Revises: e8f1a2b3c4d5
 Create Date: 2026-02-18 21:50:00.000000
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "fa12c3d4e5f6"
-down_revision = "ea1b2c3d4e6b"
+down_revision = "e8f1a2b3c4d5"
 branch_labels = None
 depends_on = None
 
