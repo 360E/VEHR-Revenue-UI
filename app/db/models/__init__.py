@@ -66,6 +66,7 @@ from app.db.models.revenue_era import (  # noqa: F401
     RevenueEraClaimLine,
     RevenueEraExtractResult,
     RevenueEraFile,
+    RevenueEraProcessingLog,
     RevenueEraStructuredResult,
     RevenueEraWorkItem,
 )

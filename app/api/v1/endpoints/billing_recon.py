@@ -88,6 +88,11 @@ class ReconLineResultRead(BaseModel):
     reason_code: str | None = None
 
 
+class LegacyReconLatestResponse(BaseModel):
+    status: str
+    message: str
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
@@ -146,6 +151,17 @@ def _job_or_404(db: Session, *, org_id: str, job_id: str) -> ReconImportJob:
 
 def _as_float(value) -> float | None:
     return float(value) if value is not None else None
+
+
+@router.get("/billing/recon/import/latest", response_model=LegacyReconLatestResponse)
+def recon_import_latest(
+    _membership: OrganizationMembership = Depends(get_current_membership),
+    _: None = Depends(require_permission("billing:read")),
+) -> LegacyReconLatestResponse:
+    return LegacyReconLatestResponse(
+        status="deprecated",
+        message="ERA Import is deprecated. Use Revenue -> ERA Intake.",
+    )
 
 
 @router.post("/billing/recon/import", response_model=ReconImportCreateResponse)

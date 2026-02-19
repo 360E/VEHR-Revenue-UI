@@ -7,7 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -29,10 +29,12 @@ from app.services.revenue_era import (
     WORKITEM_OPEN,
     log_attempt,
     normalize_structured,
+    record_processing_log,
     run_doc_intel,
     run_structuring_llm,
     store_revenue_file,
     write_pdf_with_sha,
+    summarize_validation_error,
 )
 from app.services.storage import sanitize_filename
 
@@ -206,10 +208,29 @@ def process_era_pdf(
         db.add(extract_row)
         db.add(era_file)
         db.commit()
-    except HTTPException:
+        record_processing_log(
+            db,
+            era_file_id=era_file.id,
+            stage="extraction",
+            message=f"model_id={extract_row.model_id}",
+        )
+    except HTTPException as exc:
+        _mark_error(db, era_file, f"extract_failed: {exc.detail or exc}")
+        record_processing_log(
+            db,
+            era_file_id=era_file.id,
+            stage="error",
+            message=f"extract_failed: {exc.detail or exc}",
+        )
         raise
     except Exception as exc:
         _mark_error(db, era_file, f"extract_failed: {exc}")
+        record_processing_log(
+            db,
+            era_file_id=era_file.id,
+            stage="error",
+            message=f"extract_failed: {exc}",
+        )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="doc_intelligence_failed") from exc
 
     try:
@@ -227,14 +248,49 @@ def process_era_pdf(
         db.add(structured_row)
         db.add(era_file)
         db.commit()
-    except HTTPException:
+        record_processing_log(
+            db,
+            era_file_id=era_file.id,
+            stage="structuring",
+            message=(
+                f"deployment={structured_row.deployment}; "
+                f"api_version={structured_row.api_version}; prompt_version={structured_row.prompt_version}"
+            ),
+        )
+    except ValidationError as exc:
+        detail = summarize_validation_error(exc)
+        _mark_error(db, era_file, f"validation_failed: {detail}")
+        record_processing_log(
+            db,
+            era_file_id=era_file.id,
+            stage="validation",
+            message=detail,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="structured_validation_failed",
+        ) from exc
+    except HTTPException as exc:
+        _mark_error(db, era_file, f"structuring_failed: {exc.detail or exc}")
+        record_processing_log(
+            db,
+            era_file_id=era_file.id,
+            stage="error",
+            message=f"structuring_failed: {exc.detail or exc}",
+        )
         raise
     except Exception as exc:
         _mark_error(db, era_file, f"structuring_failed: {exc}")
+        record_processing_log(
+            db,
+            era_file_id=era_file.id,
+            stage="error",
+            message=f"structuring_failed: {exc}",
+        )
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="structuring_failed") from exc
 
     try:
-        normalize_structured(db, era_file=era_file, structured=structured)
+        claim_count, work_count = normalize_structured(db, era_file=era_file, structured=structured)
         era_file.status = STATUS_NORMALIZED
         if not era_file.payer_name_raw:
             era_file.payer_name_raw = structured.payer_name
@@ -242,8 +298,20 @@ def process_era_pdf(
             era_file.received_date = structured.received_date
         db.add(era_file)
         db.commit()
+        record_processing_log(
+            db,
+            era_file_id=era_file.id,
+            stage="normalization",
+            message=f"claim_count={claim_count}; work_item_count={work_count}",
+        )
     except Exception as exc:  # noqa: BLE001
         _mark_error(db, era_file, f"normalization_failed: {exc}")
+        record_processing_log(
+            db,
+            era_file_id=era_file.id,
+            stage="error",
+            message=f"normalization_failed: {exc}",
+        )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="normalization_failed") from exc
 
     log_attempt(
