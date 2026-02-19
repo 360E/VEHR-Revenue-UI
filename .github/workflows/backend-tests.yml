@@ -86,6 +86,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # CI executes upgrade only; downgrades (which can be ambiguous at mergepoints) are not part of this check.
           alembic upgrade head
 
       - name: Run tests
