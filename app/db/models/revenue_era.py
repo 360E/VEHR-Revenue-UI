@@ -8,6 +8,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -87,6 +88,9 @@ class RevenueEraFile(Base):
 
 class RevenueEraExtractResult(Base):
     __tablename__ = "revenue_era_extract_results"
+    __table_args__ = (
+        UniqueConstraint("era_file_id", name="uq_revenue_era_extract_results_file"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     era_file_id: Mapped[str] = mapped_column(
@@ -110,6 +114,9 @@ class RevenueEraExtractResult(Base):
 
 class RevenueEraStructuredResult(Base):
     __tablename__ = "revenue_era_structured_results"
+    __table_args__ = (
+        UniqueConstraint("era_file_id", name="uq_revenue_era_structured_results_file"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     era_file_id: Mapped[str] = mapped_column(
@@ -159,6 +166,13 @@ class RevenueEraClaimLine(Base):
     __tablename__ = "revenue_era_claim_lines"
     __table_args__ = (
         UniqueConstraint("era_file_id", "line_index", name="uq_revenue_era_claim_lines_file_idx"),
+        UniqueConstraint(
+            "era_file_id",
+            "claim_ref",
+            "service_date",
+            "proc_code",
+            name="uq_revenue_era_claim_lines_claim_key",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -193,6 +207,9 @@ class RevenueEraClaimLine(Base):
 
 class RevenueEraWorkItem(Base):
     __tablename__ = "revenue_era_work_items"
+    __table_args__ = (
+        UniqueConstraint("era_file_id", "claim_ref", name="uq_revenue_era_work_items_file_claim"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     organization_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=False, index=True)
@@ -222,3 +239,9 @@ class RevenueEraWorkItem(Base):
 
     era_file: Mapped[RevenueEraFile] = relationship("RevenueEraFile", back_populates="work_items")
     claim_line: Mapped[RevenueEraClaimLine | None] = relationship("RevenueEraClaimLine", back_populates="work_items")
+
+
+Index(
+    "ix_revenue_era_work_items_dollars_cents_desc",
+    RevenueEraWorkItem.dollars_cents.desc(),
+)

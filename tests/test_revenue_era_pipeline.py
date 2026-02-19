@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.api.v1.endpoints import revenue_era
@@ -18,6 +20,7 @@ from app.db.models.revenue_era import (
     RevenueEraClaimLine,
     RevenueEraFile,
     RevenueEraProcessingLog,
+    RevenueEraStructuredResult,
     RevenueEraWorkItem,
 )
 from app.db.models.user import User
@@ -171,6 +174,90 @@ def test_process_pipeline_creates_claims_and_worklist(tmp_path, monkeypatch) -> 
             )
             stages = {log.stage for log in logs}
             assert {"extraction", "structuring", "normalization"} <= stages
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_claim_lines_unique_per_claim_key(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    _, org_id = _seed_admin(session_factory)
+
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+
+    try:
+        with session_factory() as db:
+            era_file = RevenueEraFile(
+                organization_id=org_id,
+                file_name="era.pdf",
+                sha256="abc",
+                storage_ref="s3://era.pdf",
+                status="uploaded",
+            )
+            db.add(era_file)
+            db.flush()
+
+            line_one = RevenueEraClaimLine(
+                era_file_id=era_file.id,
+                line_index=0,
+                claim_ref="CLM123",
+                service_date=date(2026, 1, 2),
+                proc_code="99213",
+                match_status=MATCH_UNMATCHED,
+            )
+            line_two = RevenueEraClaimLine(
+                era_file_id=era_file.id,
+                line_index=1,
+                claim_ref="CLM123",
+                service_date=date(2026, 1, 2),
+                proc_code="99213",
+                match_status=MATCH_UNMATCHED,
+            )
+            db.add_all([line_one, line_two])
+            with pytest.raises(IntegrityError):
+                db.commit()
+            db.rollback()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_structured_results_unique_per_file(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, org_id = _seed_admin(session_factory)
+
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+
+    try:
+        with TestClient(app) as client:
+            files = [("files", ("era.pdf", b"%PDF-1.4 era", "application/pdf"))]
+            upload = client.post(
+                "/api/v1/revenue/era-pdfs/upload",
+                files=files,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert upload.status_code == 200
+            era_id = upload.json()[0]["id"]
+
+        with session_factory() as db:
+            first = RevenueEraStructuredResult(
+                era_file_id=era_id,
+                llm="gpt",
+                deployment="deploy",
+                api_version="v1",
+                prompt_version="p1",
+                structured_json={},
+            )
+            second = RevenueEraStructuredResult(
+                era_file_id=era_id,
+                llm="gpt",
+                deployment="deploy",
+                api_version="v1",
+                prompt_version="p1",
+                structured_json={},
+            )
+            db.add_all([first, second])
+            with pytest.raises(IntegrityError):
+                db.commit()
+            db.rollback()
     finally:
         app.dependency_overrides.clear()
 
