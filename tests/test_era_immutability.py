@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import os
+import json
 from contextlib import contextmanager
 from datetime import datetime
 import uuid
@@ -29,15 +29,28 @@ def _make_session():
         engine.dispose()
 
 
+def _sqlstate(exc: sqlalchemy.exc.DBAPIError) -> str | None:
+    orig = exc.orig
+    # psycopg v3
+    if hasattr(orig, "sqlstate"):
+        return getattr(orig, "sqlstate", None)
+    # psycopg2
+    if hasattr(orig, "pgcode"):
+        return getattr(orig, "pgcode", None)
+    return None
+
+
 def test_revenue_era_structured_results_are_immutable_after_finalization() -> None:
     with _make_session() as db:
         org_id = str(uuid.uuid4())
         era_file_id = str(uuid.uuid4())
         structured_id = str(uuid.uuid4())
 
-        # Insert minimal parent rows
         db.execute(
-            text("INSERT INTO organizations (id, name, created_at) VALUES (:id, :name, :created_at)"),
+            text(
+                "INSERT INTO organizations (id, name, created_at) "
+                "VALUES (:id, :name, :created_at)"
+            ),
             {"id": org_id, "name": "ERA Immutability Org", "created_at": datetime.utcnow()},
         )
 
@@ -57,10 +70,6 @@ def test_revenue_era_structured_results_are_immutable_after_finalization() -> No
             },
         )
 
-        # Use :structured_json as a plain SQLAlchemy binding; pass the value as a
-        # JSON string so the driver can hand it to the JSONB column without a
-        # PostgreSQL-specific ::jsonb cast (which is not valid in psycopg v3
-        # parameterised queries).
         db.execute(
             text(
                 "INSERT INTO revenue_era_structured_results "
@@ -78,30 +87,29 @@ def test_revenue_era_structured_results_are_immutable_after_finalization() -> No
             },
         )
 
-        # Finalize the row
         db.execute(
             text(
-                "UPDATE revenue_era_structured_results SET finalized_at = NOW() WHERE id = :id"
+                "UPDATE revenue_era_structured_results "
+                "SET finalized_at = NOW() WHERE id = :id"
             ),
             {"id": structured_id},
         )
 
-        # Assert UPDATE is blocked by the immutability trigger (SQLSTATE 45000)
         with pytest.raises(sqlalchemy.exc.DBAPIError) as exc_info:
             with db.begin_nested():
                 db.execute(
                     text(
-                        "UPDATE revenue_era_structured_results SET llm = :llm WHERE id = :id"
+                        "UPDATE revenue_era_structured_results "
+                        "SET llm = :llm WHERE id = :id"
                     ),
                     {"llm": "blocked", "id": structured_id},
                 )
-        assert exc_info.value.orig.pgcode == "45000"
+        assert _sqlstate(exc_info.value) == "45000"
 
-        # Assert DELETE is blocked by the immutability trigger (SQLSTATE 45000)
         with pytest.raises(sqlalchemy.exc.DBAPIError) as exc_info:
             with db.begin_nested():
                 db.execute(
                     text("DELETE FROM revenue_era_structured_results WHERE id = :id"),
                     {"id": structured_id},
                 )
-        assert exc_info.value.orig.pgcode == "45000"
+        assert _sqlstate(exc_info.value) == "45000"
