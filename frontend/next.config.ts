@@ -23,8 +23,16 @@ const nextConfig = {
     const normalized = apiBaseUrl.replace(/\/$/, "");
     return [
       {
-        source: "/api/:path*",
-        destination: `${normalized}/api/:path*`,
+        source: "/api/v1/:path*",
+        destination: `${normalized}/api/v1/:path*`,
+      },
+      {
+        source: "/api",
+        destination: `${normalized}/api/v1`,
+      },
+      {
+        source: "/api/:path((?!v1/).*)",
+        destination: `${normalized}/api/v1/:path`,
       },
     ];
   },
