@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from contextlib import contextmanager
 from datetime import datetime
 import uuid
@@ -36,8 +37,15 @@ def test_revenue_era_structured_results_are_immutable_after_finalization() -> No
 
         # Insert minimal parent rows
         db.execute(
-            text("INSERT INTO organizations (id, name, created_at) VALUES (:id, :name, :created_at)"),
-            {"id": org_id, "name": "ERA Immutability Org", "created_at": datetime.utcnow()},
+            text(
+                "INSERT INTO organizations (id, name, created_at) "
+                "VALUES (:id, :name, :created_at)"
+            ),
+            {
+                "id": org_id,
+                "name": "ERA Immutability Org",
+                "created_at": datetime.utcnow(),
+            },
         )
 
         db.execute(
@@ -60,7 +68,7 @@ def test_revenue_era_structured_results_are_immutable_after_finalization() -> No
             text(
                 "INSERT INTO revenue_era_structured_results "
                 "(id, era_file_id, llm, deployment, api_version, prompt_version, structured_json) "
-                "VALUES (:id, :era_file_id, :llm, :deployment, :api_version, :prompt_version, :json::jsonb)"
+                "VALUES (:id, :era_file_id, :llm, :deployment, :api_version, :prompt_version, :structured_json)"
             ),
             {
                 "id": structured_id,
@@ -69,14 +77,15 @@ def test_revenue_era_structured_results_are_immutable_after_finalization() -> No
                 "deployment": "deploy",
                 "api_version": "v1",
                 "prompt_version": "p1",
-                "json": "{}",
+                "structured_json": json.dumps({}),
             },
         )
 
         # Finalize the row
         db.execute(
             text(
-                "UPDATE revenue_era_structured_results SET finalized_at = NOW() WHERE id = :id"
+                "UPDATE revenue_era_structured_results "
+                "SET finalized_at = NOW() WHERE id = :id"
             ),
             {"id": structured_id},
         )
@@ -86,17 +95,21 @@ def test_revenue_era_structured_results_are_immutable_after_finalization() -> No
             with db.begin_nested():
                 db.execute(
                     text(
-                        "UPDATE revenue_era_structured_results SET llm = :llm WHERE id = :id"
+                        "UPDATE revenue_era_structured_results "
+                        "SET llm = :llm WHERE id = :id"
                     ),
                     {"llm": "blocked", "id": structured_id},
                 )
-        assert exc_info.value.orig.pgcode == "45000"
+        assert getattr(exc_info.value.orig, "pgcode", None) == "45000"
 
         # Assert DELETE is blocked
         with pytest.raises(sqlalchemy.exc.DBAPIError) as exc_info:
             with db.begin_nested():
                 db.execute(
-                    text("DELETE FROM revenue_era_structured_results WHERE id = :id"),
+                    text(
+                        "DELETE FROM revenue_era_structured_results "
+                        "WHERE id = :id"
+                    ),
                     {"id": structured_id},
                 )
-        assert exc_info.value.orig.pgcode == "45000"
+        assert getattr(exc_info.value.orig, "pgcode", None) == "45000"
