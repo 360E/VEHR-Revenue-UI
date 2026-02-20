@@ -31,8 +31,8 @@ const nextConfig = {
         destination: `${normalized}/api/v1`,
       },
       {
-        source: "/api/:path*",
-        destination: `${normalized}/api/v1/:path*`,
+        source: "/api/:path((?!v1/).*)",
+        destination: `${normalized}/api/v1/:path`,
       },
     ];
   },
