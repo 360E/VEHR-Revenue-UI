@@ -10,9 +10,14 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 def _normalize_database_url(url: str) -> str:
     cleaned = (url or "").strip()
-    if not cleaned.lower().startswith("postgresql"):
-        raise RuntimeError("DATABASE_URL must start with 'postgresql'")
-    return cleaned
+    lower = cleaned.lower()
+    if lower.startswith("postgresql+psycopg://"):
+        return cleaned
+    if lower.startswith("postgres://"):
+        return f"postgresql+psycopg://{cleaned[len('postgres://'):]}"
+    if lower.startswith("postgresql://"):
+        return f"postgresql+psycopg://{cleaned[len('postgresql://'):]}"
+    raise RuntimeError("DATABASE_URL must use Postgres (postgres:// or postgresql://)")
 
 
 class _LazyEngine:
