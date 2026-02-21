@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from app.db.models.revenue_era import (
     RevenueEraProcessingLog,
     RevenueEraExtractResult,
     RevenueEraStructuredResult,
+    RevenueEraValidationReport,
     RevenueEraWorkItem,
 )
 from app.db.models.user import User
@@ -232,6 +234,7 @@ def test_claim_lines_unique_per_claim_key(tmp_path, monkeypatch) -> None:
                 organization_id=org_id,
                 file_name="era.pdf",
                 sha256="abc",
+                file_sha256="abc",
                 storage_ref="s3://era.pdf",
                 status="uploaded",
             )
@@ -826,5 +829,173 @@ def test_process_respects_org_scope(tmp_path, monkeypatch) -> None:
             file_row = db.get(RevenueEraFile, era_id)
             assert file_row.organization_id == org_id1
             assert file_row.status == STATUS_UPLOADED
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_phase2_validate_duplicate_upload_returns_409_and_no_new_rows(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, org_id = _seed_admin(session_factory)
+    monkeypatch.setenv("PHASE2_VALIDATION", "1")
+    monkeypatch.delenv("FAIL_CLOSED", raising=False)
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(revenue_era, "run_doc_intel", lambda path: {"model_id": "x", "extracted": {"ok": True}})
+    monkeypatch.setattr(
+        revenue_era,
+        "run_structuring_llm",
+        lambda payload: RevenueEraStructuredV1(
+            payer_name="Payer",
+            claim_lines=[RevenueEraStructuredLine(claim_ref="CLM1", charge_cents=100, paid_cents=90)],
+        ),
+    )
+    try:
+        with TestClient(app) as client:
+            files = {"file": ("era.pdf", b"%PDF-1.4 data", "application/pdf")}
+            first = client.post("/api/v1/era/validate", files=files, headers={"Authorization": f"Bearer {token}"})
+            assert first.status_code == 200
+
+            second = client.post("/api/v1/era/validate", files=files, headers={"Authorization": f"Bearer {token}"})
+            assert second.status_code == 409
+            payload = second.json()["detail"]
+            assert payload["error_code"] == "ERA_DUPLICATE"
+            assert payload["era_file_id"] == first.json()["era_file_id"]
+
+        with session_factory() as db:
+            assert len(db.execute(select(RevenueEraFile).where(RevenueEraFile.organization_id == org_id)).scalars().all()) == 1
+            assert (
+                len(
+                    db.execute(
+                        select(RevenueEraValidationReport).where(RevenueEraValidationReport.org_id == org_id)
+                    )
+                    .scalars()
+                    .all()
+                )
+                == 1
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_phase2_validate_phi_detection_blocks_ingestion(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, org_id = _seed_admin(session_factory)
+    monkeypatch.setenv("PHASE2_VALIDATION", "1")
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(revenue_era, "run_doc_intel", lambda path: {"model_id": "x", "extracted": {"ok": True}})
+    monkeypatch.setattr(
+        revenue_era,
+        "run_structuring_llm",
+        lambda payload: RevenueEraStructuredV1(
+            payer_name="billing@example.com",
+            claim_lines=[RevenueEraStructuredLine(claim_ref="CLM1", charge_cents=100, paid_cents=90)],
+        ),
+    )
+    try:
+        with TestClient(app) as client:
+            files = {"file": ("era.pdf", b"%PDF-1.4 data", "application/pdf")}
+            response = client.post("/api/v1/era/validate", files=files, headers={"Authorization": f"Bearer {token}"})
+            assert response.status_code == 422
+            assert response.json()["detail"]["error_code"] == "ERA_PHI_DETECTED"
+
+        with session_factory() as db:
+            assert db.execute(select(RevenueEraFile).where(RevenueEraFile.organization_id == org_id)).scalars().all() == []
+            assert (
+                db.execute(select(RevenueEraValidationReport).where(RevenueEraValidationReport.org_id == org_id))
+                .scalars()
+                .all()
+                == []
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_phase2_validate_schema_failure_rolls_back_all_rows(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, org_id = _seed_admin(session_factory)
+    monkeypatch.setenv("PHASE2_VALIDATION", "1")
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(revenue_era, "run_doc_intel", lambda path: {"model_id": "x", "extracted": {"ok": True}})
+
+    bad_payload = {"payer_name": "Payer", "claim_lines": [{"claim_ref": "CLM123", "patient_name": "Name"}]}
+    try:
+        RevenueEraStructuredV1.model_validate(bad_payload)
+    except ValidationError as exc:
+        validation_error = exc
+    else:  # pragma: no cover
+        raise AssertionError("Expected validation error")
+    monkeypatch.setattr(revenue_era, "run_structuring_llm", lambda payload: (_ for _ in ()).throw(validation_error))
+    try:
+        with TestClient(app) as client:
+            files = {"file": ("era.pdf", b"%PDF-1.4 data", "application/pdf")}
+            response = client.post("/api/v1/era/validate", files=files, headers={"Authorization": f"Bearer {token}"})
+            assert response.status_code == 422
+            assert response.json()["detail"]["error_code"] == "ERA_SCHEMA_INVALID"
+
+        with session_factory() as db:
+            assert db.execute(select(RevenueEraFile).where(RevenueEraFile.organization_id == org_id)).scalars().all() == []
+            assert db.execute(select(RevenueEraExtractResult)).scalars().all() == []
+            assert db.execute(select(RevenueEraStructuredResult)).scalars().all() == []
+            assert db.execute(select(RevenueEraClaimLine)).scalars().all() == []
+            assert db.execute(select(RevenueEraWorkItem)).scalars().all() == []
+            assert db.execute(select(RevenueEraValidationReport)).scalars().all() == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_float_and_decimal_amounts_rejected() -> None:
+    with pytest.raises(ValidationError):
+        RevenueEraStructuredLine.model_validate({"claim_ref": "X", "charge_cents": 1.5})
+    with pytest.raises(ValidationError):
+        RevenueEraStructuredLine.model_validate({"claim_ref": "X", "charge_cents": Decimal("10.0")})
+
+
+def test_worklist_sorting_is_deterministic_with_tiebreaker(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, org_id = _seed_admin(session_factory)
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+    try:
+        with session_factory() as db:
+            era_file = RevenueEraFile(
+                organization_id=org_id,
+                file_name="era.pdf",
+                sha256="sha",
+                file_sha256="sha",
+                storage_ref="s3://era.pdf",
+                status=STATUS_NORMALIZED,
+            )
+            db.add(era_file)
+            db.flush()
+            first = RevenueEraWorkItem(
+                organization_id=org_id,
+                era_file_id=era_file.id,
+                era_claim_line_id=None,
+                type="REVIEW_REQUIRED",
+                dollars_cents=5000,
+                payer_name="Payer",
+                claim_ref="A",
+                status="OPEN",
+            )
+            second = RevenueEraWorkItem(
+                organization_id=org_id,
+                era_file_id=era_file.id,
+                era_claim_line_id=None,
+                type="REVIEW_REQUIRED",
+                dollars_cents=5000,
+                payer_name="Payer",
+                claim_ref="B",
+                status="OPEN",
+            )
+            db.add_all([first, second])
+            db.flush()
+            first.created_at = datetime(2026, 1, 1)
+            second.created_at = datetime(2026, 1, 2)
+            db.commit()
+
+        with TestClient(app) as client:
+            response = client.get("/api/v1/revenue/era-worklist", headers={"Authorization": f"Bearer {token}"})
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload[0]["claim_ref"] == "A"
+            assert payload[1]["claim_ref"] == "B"
     finally:
         app.dependency_overrides.clear()

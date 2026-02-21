@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -34,12 +35,14 @@ class RevenueEraFile(Base):
     __tablename__ = "revenue_era_files"
     __table_args__ = (
         UniqueConstraint("organization_id", "sha256", name="uq_revenue_era_files_org_sha"),
+        UniqueConstraint("organization_id", "file_sha256", name="uq_revenue_era_files_org_file_sha256"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     organization_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=False, index=True)
     file_name: Mapped[str] = mapped_column(Text, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    file_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     payer_name_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
     received_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     storage_ref: Mapped[str] = mapped_column(Text, nullable=False)
@@ -81,6 +84,11 @@ class RevenueEraFile(Base):
     )
     processing_logs: Mapped[list["RevenueEraProcessingLog"]] = relationship(
         "RevenueEraProcessingLog",
+        back_populates="era_file",
+        cascade="all, delete-orphan",
+    )
+    validation_reports: Mapped[list["RevenueEraValidationReport"]] = relationship(
+        "RevenueEraValidationReport",
         back_populates="era_file",
         cascade="all, delete-orphan",
     )
@@ -239,6 +247,39 @@ class RevenueEraWorkItem(Base):
 
     era_file: Mapped[RevenueEraFile] = relationship("RevenueEraFile", back_populates="work_items")
     claim_line: Mapped[RevenueEraClaimLine | None] = relationship("RevenueEraClaimLine", back_populates="work_items")
+
+
+class RevenueEraValidationReport(Base):
+    __tablename__ = "era_validation_report"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    org_id: Mapped[str] = mapped_column(String(36), ForeignKey("organizations.id"), nullable=False, index=True)
+    era_file_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("revenue_era_files.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    claim_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    line_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    work_item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_paid_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_adjustment_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_patient_resp_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    net_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reconciled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    declared_total_missing: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    phi_scan_passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    phi_hit_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    finalized: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=expression.text("CURRENT_TIMESTAMP"),
+    )
+
+    era_file: Mapped[RevenueEraFile] = relationship("RevenueEraFile", back_populates="validation_reports")
 
 
 Index(

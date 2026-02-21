@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -22,6 +24,7 @@ from app.db.models.revenue_era import (
     RevenueEraStructuredResult,
     RevenueEraWorkItem,
 )
+from app.core.env import env_default_bool
 from app.services.audit import log_event
 from app.services.storage import sanitize_filename
 
@@ -59,6 +62,38 @@ _FORBIDDEN_PHI_KEYS = {
     "ssn",
 }
 
+_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_PHONE_RE = re.compile(r"(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}\b")
+_SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+_DOB_RE = re.compile(r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})\b")
+
+ERROR_CODE_DUPLICATE = "ERA_DUPLICATE"
+ERROR_CODE_SCHEMA_INVALID = "ERA_SCHEMA_INVALID"
+ERROR_CODE_PHI_DETECTED = "ERA_PHI_DETECTED"
+ERROR_CODE_RECONCILIATION_FAILED = "ERA_RECONCILIATION_FAILED"
+ERROR_CODE_PROCESSING_FAILED = "ERA_PROCESSING_FAILED"
+
+
+class EraSchemaInvalidError(RuntimeError):
+    pass
+
+
+class EraPhiDetectedError(RuntimeError):
+    pass
+
+
+class EraReconciliationError(RuntimeError):
+    pass
+
+
+def phase2_validation_enabled() -> bool:
+    return env_default_bool("PHASE2_VALIDATION", False)
+
+
+def fail_closed_enabled() -> bool:
+    default = phase2_validation_enabled()
+    return env_default_bool("FAIL_CLOSED", default)
+
 
 def summarize_validation_error(exc: ValidationError) -> str:
     parts: list[str] = []
@@ -83,7 +118,7 @@ class RevenueEraAdjustment(BaseModel):
     def _ensure_int(cls, value: Any) -> int:
         if isinstance(value, bool):
             raise ValueError("amount_cents must be integer")
-        if isinstance(value, float):
+        if isinstance(value, (float, Decimal)):
             raise ValueError("floats not allowed")
         try:
             return int(value)
@@ -98,19 +133,20 @@ class RevenueEraStructuredLine(BaseModel):
     charge_cents: int | None = None
     allowed_cents: int | None = None
     paid_cents: int | None = None
+    patient_responsibility_cents: int | None = None
     adjustments: list[RevenueEraAdjustment] = Field(default_factory=list)
     match_status: str | None = None
 
     model_config = ConfigDict(extra="forbid")
 
-    @field_validator("charge_cents", "allowed_cents", "paid_cents", mode="before")
+    @field_validator("charge_cents", "allowed_cents", "paid_cents", "patient_responsibility_cents", mode="before")
     @classmethod
     def _ensure_optional_int(cls, value: Any) -> int | None:
         if value is None:
             return None
         if isinstance(value, bool):
             raise ValueError("cents must be integer")
-        if isinstance(value, float):
+        if isinstance(value, (float, Decimal)):
             raise ValueError("floats not allowed")
         try:
             return int(value)
@@ -121,6 +157,10 @@ class RevenueEraStructuredLine(BaseModel):
 class RevenueEraStructuredV1(BaseModel):
     payer_name: str
     received_date: date | None = None
+    declared_total_paid_cents: int | None = None
+    declared_total_adjustment_cents: int | None = None
+    declared_total_patient_resp_cents: int | None = None
+    declared_net_cents: int | None = None
     claim_lines: list[RevenueEraStructuredLine]
 
     model_config = ConfigDict(extra="forbid")
@@ -140,6 +180,26 @@ class RevenueEraStructuredV1(BaseModel):
 
         _check(value)
         return value
+
+    @field_validator(
+        "declared_total_paid_cents",
+        "declared_total_adjustment_cents",
+        "declared_total_patient_resp_cents",
+        "declared_net_cents",
+        mode="before",
+    )
+    @classmethod
+    def _ensure_declared_int(cls, value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError("declared totals must be integer")
+        if isinstance(value, (float, Decimal)):
+            raise ValueError("floats not allowed")
+        try:
+            return int(value)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("declared totals must be integer") from exc
 
 
 def _repo_root() -> Path:
@@ -189,7 +249,7 @@ def store_revenue_file(
     duplicate = db.execute(
         select(RevenueEraFile).where(
             RevenueEraFile.organization_id == organization_id,
-            RevenueEraFile.sha256 == sha256,
+            RevenueEraFile.file_sha256 == sha256,
         )
     ).scalar_one_or_none()
     if duplicate:
@@ -200,6 +260,7 @@ def store_revenue_file(
         organization_id=organization_id,
         file_name=file_name,
         sha256=sha256,
+        file_sha256=sha256,
         payer_name_raw=payer_name_raw,
         received_date=received_date,
         storage_ref=storage_ref,
@@ -394,6 +455,86 @@ def normalize_structured(
     db.flush()
     dollars_total = sum(item.dollars_cents for item in work_records)
     return len(line_records), len(work_records), dollars_total
+
+
+def phi_scan(structured_payload: dict[str, Any]) -> tuple[bool, list[str]]:
+    hits: set[str] = set()
+
+    def _walk(value: Any, path: str = "") -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                key_lower = str(key).lower()
+                if any(token in key_lower for token in {"patient_name", "member_name", "dob", "address"}):
+                    hits.add(path + key_lower)
+                _walk(nested, f"{path}{key}.")
+            return
+        if isinstance(value, list):
+            for idx, nested in enumerate(value):
+                _walk(nested, f"{path}{idx}.")
+            return
+        if isinstance(value, str):
+            if _EMAIL_RE.search(value):
+                hits.add("email")
+            if _PHONE_RE.search(value):
+                hits.add("phone")
+            if _SSN_RE.search(value):
+                hits.add("ssn")
+            if _DOB_RE.search(value):
+                hits.add("dob")
+
+    _walk(structured_payload)
+    hit_list = sorted(hits)
+    return len(hit_list) == 0, hit_list
+
+
+def reconcile_era(structured: RevenueEraStructuredV1) -> dict[str, Any]:
+    total_paid = 0
+    total_adjustment = 0
+    total_patient_resp = 0
+    line_count = 0
+    for line in structured.claim_lines:
+        line_count += 1
+        for value in (line.paid_cents, line.patient_responsibility_cents):
+            if value is not None and not isinstance(value, int):
+                raise EraReconciliationError("non_integer_cents")
+        paid = line.paid_cents or 0
+        patient_resp = line.patient_responsibility_cents or 0
+        adjustment = 0
+        for adj in line.adjustments:
+            if not isinstance(adj.amount_cents, int):
+                raise EraReconciliationError("non_integer_adjustment")
+            adjustment += adj.amount_cents
+        total_paid += paid
+        total_adjustment += adjustment
+        total_patient_resp += patient_resp
+
+    net_cents = total_paid - total_adjustment - total_patient_resp
+    declared = {
+        "paid": structured.declared_total_paid_cents,
+        "adjustment": structured.declared_total_adjustment_cents,
+        "patient_responsibility": structured.declared_total_patient_resp_cents,
+        "net": structured.declared_net_cents,
+    }
+    declared_total_missing = all(value is None for value in declared.values())
+    reconciled = True
+    if not declared_total_missing:
+        reconciled = (
+            declared["paid"] == total_paid
+            and declared["adjustment"] == total_adjustment
+            and declared["patient_responsibility"] == total_patient_resp
+            and declared["net"] == net_cents
+        )
+        if not reconciled:
+            raise EraReconciliationError("declared_totals_mismatch")
+    return {
+        "line_count": line_count,
+        "total_paid_cents": total_paid,
+        "total_adjustment_cents": total_adjustment,
+        "total_patient_resp_cents": total_patient_resp,
+        "net_cents": net_cents,
+        "declared_total_missing": declared_total_missing,
+        "reconciled": reconciled,
+    }
 
 
 def log_attempt(db: Session, *, organization_id: str, actor: str, era_file_id: str, action: str) -> None:
