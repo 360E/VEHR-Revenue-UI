@@ -413,7 +413,9 @@ def test_structuring_failure_sets_error_status(tmp_path, monkeypatch) -> None:
                 .scalars()
                 .all()
             )
-            assert any(log.stage == "structuring" for log in logs)
+            assert any(
+                log.stage == "structuring" and "STRUCTURE_SCHEMA_INVALID" in (log.message or "") for log in logs
+            )
     finally:
         app.dependency_overrides.clear()
 
