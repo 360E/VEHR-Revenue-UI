@@ -1225,7 +1225,6 @@ def retry_reset_era_pdf(
         actor=membership.user.email,
         era_file_id=era_file.id,
         action="era_pdf_retry_reset",
-        metadata={"stage": "retry_reset"},
     )
     return era_file
 
