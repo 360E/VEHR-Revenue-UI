@@ -23,6 +23,10 @@ _DEFAULT_CORS_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
+_LOCALHOST_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 
 _CORS_ENV_KEYS: tuple[str, ...] = (
     "CORS_ALLOWED_ORIGINS",
@@ -52,6 +56,37 @@ def _log_auth_dependency_versions() -> None:
 
 
 def get_cors_origins() -> list[str]:
+    if truthy_env("LOCAL_DEV"):
+        raw = ""
+        source_key: str | None = None
+        for key in _CORS_ENV_KEYS:
+            value = os.getenv(key, "").strip()
+            if value:
+                raw = value
+                source_key = key
+                break
+
+        base_origins = sorted(set(_LOCALHOST_CORS_ORIGINS))
+        if not raw:
+            return base_origins
+        if raw == "*":
+            logger.warning(
+                "%s='*' is unsafe with allow_credentials; using localhost origins in LOCAL_DEV.",
+                source_key or "CORS_ALLOWED_ORIGINS",
+            )
+            return base_origins
+
+        configured: list[str] = []
+        for token in raw.split(","):
+            origin = token.strip().rstrip("/")
+            if not origin:
+                continue
+            parsed = urlparse(origin)
+            if parsed.scheme != "http" or parsed.hostname not in {"localhost", "127.0.0.1"}:
+                continue
+            configured.append(origin)
+        return sorted(set(base_origins + configured))
+
     raw = ""
     source_key: str | None = None
     for key in _CORS_ENV_KEYS:
@@ -121,6 +156,8 @@ def create_app(*, enable_startup_validation: bool = True, include_router: bool =
             import app.db.models  # register models
 
         _log_auth_dependency_versions()
+        if truthy_env("LOCAL_DEV"):
+            logger.warning("Running Revenue OS in LOCAL DEV MODE")
         cors_origins = get_cors_origins()
         logger.info("CORS origins configured: %s", len(cors_origins))
         logger.info("CORS origins: %s", ",".join(cors_origins))

@@ -152,6 +152,25 @@ POST /api/v1/auth/bootstrap with:
 Use the returned token as:
 Authorization: Bearer <token>
 
+Run Revenue OS Standalone
+
+1. Copy env template and set DATABASE_URL:
+   - cp .env.example .env
+   - export DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/vehr
+2. Start Postgres and run migrations:
+   - make db-up
+   - make migrate
+3. Start API:
+   - make run
+4. Bootstrap org/admin (requires `BOOTSTRAP_ENABLED=1`):
+   - curl -X POST http://127.0.0.1:8000/api/v1/bootstrap \
+     -H "Content-Type: application/json" \
+     -d '{"organization_name":"Revenue OS Org","admin_email":"admin@example.com","admin_password":"ChangeMeNow!","admin_name":"Admin User"}'
+5. Login, upload ERA, process, and review worklist:
+   - POST /api/v1/auth/login
+   - Use frontend page: /revenue/era-intake
+   - Use debug endpoint: GET /api/v1/revenue/era-pdfs/{era_file_id}/debug
+
 Invite emails (SMTP configuration)
 
 To send user invites by email, set all of the following API env vars:

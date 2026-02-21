@@ -99,7 +99,7 @@ export default function EraIntakePage() {
       });
       await refreshData();
     } catch (err) {
-      setError(toError(err, "Processing failed."));
+      setError(toProcessError(err));
     } finally {
       setProcessingId(null);
     }
@@ -259,4 +259,16 @@ function toError(error: unknown, fallback: string): string {
   if (error instanceof ApiError && error.message) return error.message;
   if (error instanceof Error && error.message) return error.message;
   return fallback;
+}
+
+function toProcessError(error: unknown): string {
+  if (error instanceof ApiError && error.info && typeof error.info === "object") {
+    const info = error.info as { stage?: unknown; error_code?: unknown; error?: unknown };
+    if (info.error === "external_service_failure") {
+      const stage = typeof info.stage === "string" ? info.stage : "unknown";
+      const errorCode = typeof info.error_code === "string" ? info.error_code : "UNKNOWN";
+      return `Processing failed (stage: ${stage}, code: ${errorCode}).`;
+    }
+  }
+  return toError(error, "Processing failed.");
 }

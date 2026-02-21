@@ -6,7 +6,7 @@ import logging
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
-from app.main import app
+from app.main import app, get_cors_origins
 
 
 ALLOWED_ORIGIN = "http://localhost:3000"
@@ -69,3 +69,12 @@ def test_cors_preflight_for_protected_endpoints_asyncclient() -> None:
 
     asyncio.run(_run())
 
+
+def test_local_dev_cors_origins_are_localhost_only(monkeypatch) -> None:
+    monkeypatch.setenv("LOCAL_DEV", "1")
+    monkeypatch.setenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,https://evil.example.com",
+    )
+    origins = get_cors_origins()
+    assert origins == ["http://127.0.0.1:3000", "http://localhost:3000"]

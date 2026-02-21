@@ -11,6 +11,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_membership, require_permission
+from app.core.env import env_default_bool
 from app.core.rbac import (
     ROLE_ADMIN,
     ROLE_CASE_MANAGER,
@@ -68,6 +69,11 @@ class BootstrapRequest(BaseModel):
     admin_email: str
     admin_password: str
     admin_name: str | None = None
+
+
+class StandaloneBootstrapResponse(BaseModel):
+    organization_id: str
+    admin_user_id: str
 
 
 class UserCreate(BaseModel):
@@ -447,6 +453,52 @@ def bootstrap(request: BootstrapRequest, db: Session = Depends(get_db)) -> Token
         organization_id=org.id,
         user_id=user.id,
     )
+
+
+@router.post("/bootstrap", response_model=StandaloneBootstrapResponse, status_code=status.HTTP_201_CREATED)
+def standalone_bootstrap(request: BootstrapRequest, db: Session = Depends(get_db)) -> StandaloneBootstrapResponse:
+    if not env_default_bool("BOOTSTRAP_ENABLED", env_default_bool("LOCAL_DEV", False)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    org_name = request.organization_name.strip()
+    if not org_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="organization_name_required")
+
+    admin_email = _normalize_email(request.admin_email)
+    org = db.execute(select(Organization).where(Organization.name == org_name)).scalar_one_or_none()
+    if org is None:
+        org = Organization(name=org_name)
+        db.add(org)
+        db.flush()
+
+    user = db.execute(select(User).where(User.email == admin_email)).scalar_one_or_none()
+    if user is None:
+        user = User(
+            email=admin_email,
+            full_name=request.admin_name,
+            hashed_password=hash_password(request.admin_password),
+            is_active=True,
+        )
+        db.add(user)
+        db.flush()
+
+    membership = db.execute(
+        select(OrganizationMembership).where(
+            OrganizationMembership.organization_id == org.id,
+            OrganizationMembership.user_id == user.id,
+        )
+    ).scalar_one_or_none()
+    if membership is None:
+        db.add(
+            OrganizationMembership(
+                organization_id=org.id,
+                user_id=user.id,
+                role=ROLE_ADMIN,
+            )
+        )
+    db.commit()
+    ensure_org_roles_seeded(db, organization_id=org.id)
+    return StandaloneBootstrapResponse(organization_id=org.id, admin_user_id=user.id)
 
 
 @router.post("/auth/login", response_model=TokenResponse)

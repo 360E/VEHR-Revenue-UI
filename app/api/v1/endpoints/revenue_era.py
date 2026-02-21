@@ -12,7 +12,7 @@ import requests
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 try:
@@ -28,6 +28,7 @@ from app.db.models.revenue_era import (
     RevenueEraClaimLine,
     RevenueEraExtractResult,
     RevenueEraFile,
+    RevenueEraProcessingLog,
     RevenueEraStructuredResult,
     RevenueEraValidationReport,
     RevenueEraWorkItem,
@@ -145,6 +146,37 @@ class EraProcessDiagnosticsResponse(BaseModel):
     last_error_stage: str | None = None
 
 
+class EraDebugFileResponse(BaseModel):
+    id: str
+    status: str
+    sha256: str
+    created_at: datetime
+    updated_at: datetime
+    error_detail_safe_json: dict[str, Any] | None = None
+    finalized_at: datetime | None = None
+    processing_version: str | None = None
+
+
+class EraDebugLogResponse(BaseModel):
+    created_at: datetime
+    stage: str
+    message: str
+
+
+class EraDebugRowCountsResponse(BaseModel):
+    extract_results: int
+    structured_results: int
+    claim_lines: int
+    work_items: int
+    validation_reports: int
+
+
+class EraDebugResponse(BaseModel):
+    era_file: EraDebugFileResponse
+    latest_processing_logs: list[EraDebugLogResponse]
+    row_counts: EraDebugRowCountsResponse
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
@@ -237,6 +269,23 @@ def _safe_error_metadata(error_detail: str | None) -> tuple[str | None, str | No
     safe_error_code = str(error_code) if isinstance(error_code, str) else None
     safe_stage = str(stage) if isinstance(stage, str) else None
     return safe_error_code, safe_stage
+
+
+def _safe_error_detail_json(error_detail: str | None) -> dict[str, Any] | None:
+    if not error_detail:
+        return None
+    try:
+        parsed = json.loads(error_detail)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    safe: dict[str, Any] = {}
+    for key in ("error_code", "stage", "request_id", "exception_type"):
+        value = parsed.get(key)
+        if isinstance(value, str):
+            safe[key] = value
+    return safe or None
 
 
 @router.post("/revenue/era-pdfs/upload", response_model=list[EraFileResponse])
@@ -761,7 +810,7 @@ def process_era_pdf(
         db.commit()
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            content={"error": "external_service_failure", "stage": stage},
+            content={"error": "external_service_failure", "stage": stage, "error_code": error_code},
         )
 
     era_file.error_detail = None
@@ -776,8 +825,9 @@ def process_era_pdf(
         di_result = _run_with_timeout(run_doc_intel, pdf_path)
     except (TimeoutError, FuturesTimeoutError, requests.exceptions.Timeout, httpx.TimeoutException) as exc:
         logger.error(
-            "external_service_failure",
+            "era_process_failed",
             extra={
+                "event": "era_process_failed",
                 "stage": "extract",
                 "era_file_id": era_file.id,
                 "organization_id": organization.id,
@@ -789,30 +839,32 @@ def process_era_pdf(
         return _external_service_failure("extract", "EXTRACT_TIMEOUT", exc)
     except AzureError as exc:
         logger.error(
-            "external_service_failure",
+            "era_process_failed",
             extra={
+                "event": "era_process_failed",
                 "stage": "extract",
                 "era_file_id": era_file.id,
                 "organization_id": organization.id,
-                "error_code": "AZURE_ERROR",
+                "error_code": "EXTRACT_AZURE_ERROR",
                 "exception_type": exc.__class__.__name__,
                 "request_id": _exception_request_id(exc),
             },
         )
-        return _external_service_failure("extract", "AZURE_ERROR", exc)
+        return _external_service_failure("extract", "EXTRACT_AZURE_ERROR", exc)
     except Exception as exc:
         logger.error(
-            "external_service_failure",
+            "era_process_failed",
             extra={
+                "event": "era_process_failed",
                 "stage": "extract",
                 "era_file_id": era_file.id,
                 "organization_id": organization.id,
-                "error_code": "UNKNOWN_ERROR",
+                "error_code": "EXTRACT_UNKNOWN_ERROR",
                 "exception_type": exc.__class__.__name__,
                 "request_id": _exception_request_id(exc),
             },
         )
-        return _external_service_failure("extract", "UNKNOWN_ERROR", exc)
+        return _external_service_failure("extract", "EXTRACT_UNKNOWN_ERROR", exc)
 
     extracted_payload = di_result.get("extracted") or {}
     page_count = 0
@@ -868,8 +920,9 @@ def process_era_pdf(
         _fail("structuring", "validation_failed", status.HTTP_422_UNPROCESSABLE_ENTITY, "structured_validation_failed")
     except (TimeoutError, FuturesTimeoutError, requests.exceptions.Timeout, httpx.TimeoutException) as exc:
         logger.error(
-            "external_service_failure",
+            "era_process_failed",
             extra={
+                "event": "era_process_failed",
                 "stage": "structuring",
                 "era_file_id": era_file.id,
                 "organization_id": organization.id,
@@ -881,30 +934,32 @@ def process_era_pdf(
         return _external_service_failure("structuring", "STRUCTURE_TIMEOUT", exc)
     except AzureError as exc:
         logger.error(
-            "external_service_failure",
+            "era_process_failed",
             extra={
+                "event": "era_process_failed",
                 "stage": "structuring",
                 "era_file_id": era_file.id,
                 "organization_id": organization.id,
-                "error_code": "AZURE_ERROR",
+                "error_code": "STRUCTURE_AZURE_ERROR",
                 "exception_type": exc.__class__.__name__,
                 "request_id": _exception_request_id(exc),
             },
         )
-        return _external_service_failure("structuring", "AZURE_ERROR", exc)
+        return _external_service_failure("structuring", "STRUCTURE_AZURE_ERROR", exc)
     except Exception as exc:
         logger.error(
-            "external_service_failure",
+            "era_process_failed",
             extra={
+                "event": "era_process_failed",
                 "stage": "structuring",
                 "era_file_id": era_file.id,
                 "organization_id": organization.id,
-                "error_code": "UNKNOWN_ERROR",
+                "error_code": "STRUCTURE_UNKNOWN_ERROR",
                 "exception_type": exc.__class__.__name__,
                 "request_id": _exception_request_id(exc),
             },
         )
-        return _external_service_failure("structuring", "UNKNOWN_ERROR", exc)
+        return _external_service_failure("structuring", "STRUCTURE_UNKNOWN_ERROR", exc)
 
     era_file = _locked_era_file()
     if era_file.status != STATUS_PROCESSING_STRUCTURING:
@@ -1014,6 +1069,73 @@ def get_era_process_diagnostics(
         finalized=validation_report.finalized if validation_report else None,
         last_error_code=last_error_code,
         last_error_stage=era_file.last_error_stage or last_error_stage,
+    )
+
+
+@router.get("/revenue/era-pdfs/{era_file_id}/debug", response_model=EraDebugResponse)
+def get_era_debug(
+    era_file_id: str,
+    db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
+    membership: OrganizationMembership = Depends(get_current_membership),
+    _: None = Depends(require_permission("billing:read")),
+) -> EraDebugResponse:
+    era_file = _era_file_or_404(db, era_file_id=era_file_id, organization_id=organization.id)
+    structured_row = _latest_structured_result(db, era_file.id)
+    validation_report = _latest_validation_report(db, organization_id=organization.id, era_file_id=era_file.id)
+    latest_logs = (
+        db.execute(
+            select(RevenueEraProcessingLog)
+            .where(RevenueEraProcessingLog.era_file_id == era_file.id)
+            .order_by(RevenueEraProcessingLog.created_at.desc())
+            .limit(20)
+        )
+        .scalars()
+        .all()
+    )
+    counts = EraDebugRowCountsResponse(
+        extract_results=db.execute(
+            select(func.count()).select_from(RevenueEraExtractResult).where(RevenueEraExtractResult.era_file_id == era_file.id)
+        ).scalar_one(),
+        structured_results=db.execute(
+            select(func.count())
+            .select_from(RevenueEraStructuredResult)
+            .where(RevenueEraStructuredResult.era_file_id == era_file.id)
+        ).scalar_one(),
+        claim_lines=db.execute(
+            select(func.count()).select_from(RevenueEraClaimLine).where(RevenueEraClaimLine.era_file_id == era_file.id)
+        ).scalar_one(),
+        work_items=db.execute(
+            select(func.count()).select_from(RevenueEraWorkItem).where(RevenueEraWorkItem.era_file_id == era_file.id)
+        ).scalar_one(),
+        validation_reports=db.execute(
+            select(func.count())
+            .select_from(RevenueEraValidationReport)
+            .where(RevenueEraValidationReport.era_file_id == era_file.id)
+        ).scalar_one(),
+    )
+    log_attempt(
+        db,
+        organization_id=organization.id,
+        actor=membership.user.email,
+        era_file_id=era_file.id,
+        action="era_pdf_debug_view",
+    )
+    return EraDebugResponse(
+        era_file=EraDebugFileResponse(
+            id=era_file.id,
+            status=era_file.status,
+            sha256=era_file.sha256,
+            created_at=era_file.created_at,
+            updated_at=era_file.updated_at,
+            error_detail_safe_json=_safe_error_detail_json(era_file.error_detail),
+            finalized_at=validation_report.created_at if validation_report and validation_report.finalized else None,
+            processing_version=structured_row.prompt_version if structured_row else None,
+        ),
+        latest_processing_logs=[
+            EraDebugLogResponse(created_at=row.created_at, stage=row.stage, message=row.message) for row in latest_logs
+        ],
+        row_counts=counts,
     )
 
 
