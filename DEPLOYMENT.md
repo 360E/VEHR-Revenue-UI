@@ -145,13 +145,13 @@ Login example:
 6. **Null/constraint mismatch introduced by migration** on rows read during login path.
 
 ### Where to look in code (auth + boot path only)
-- Login route + query flow: `/home/runner/work/VEHR/VEHR/app/api/v1/endpoints/auth.py` (`login` at `@router.post("/auth/login")`).
-- DB session creation: `/home/runner/work/VEHR/VEHR/app/db/session.py` (`get_db`, `SessionLocal`, `_normalize_database_url`).
-- Password verify + JWT creation: `/home/runner/work/VEHR/VEHR/app/core/security.py` (`verify_password`, `create_access_token`).
-- Membership lookup model: `/home/runner/work/VEHR/VEHR/app/db/models/organization_membership.py`.
-- User model fields used on login: `/home/runner/work/VEHR/VEHR/app/db/models/user.py`.
-- App boot/router wiring: `/home/runner/work/VEHR/VEHR/app/create_app.py`, `/home/runner/work/VEHR/VEHR/app/api/v1/router.py`.
-- Migration chain: `/home/runner/work/VEHR/VEHR/alembic/versions/*.py`.
+- Login route + query flow: `app/api/v1/endpoints/auth.py` (`login` at `@router.post("/auth/login")`).
+- DB session creation: `app/db/session.py` (`get_db`, `SessionLocal`, `_normalize_database_url`).
+- Password verify + JWT creation: `app/core/security.py` (`verify_password`, `create_access_token`).
+- Membership lookup model: `app/db/models/organization_membership.py`.
+- User model fields used on login: `app/db/models/user.py`.
+- App boot/router wiring: `app/create_app.py`, `app/api/v1/router.py`.
+- Migration chain: `alembic/versions/*.py`.
 
 ### Render log queries to run (exact search terms)
 - **Migration chain mismatch**
@@ -183,7 +183,7 @@ Login example:
   2. On prod DB service shell: `alembic current`, `alembic heads`, `alembic history --verbose`.
   3. Resolve revision DAG in `alembic/versions` (single head, no cycles), redeploy, then `alembic upgrade head`.
 - **If missing env var**
-  1. In Render service env, verify: `DATABASE_URL`, `JWT_SECRET`, `JWT_ALGORITHM` (if set), `ACCESS_TOKEN_EXPIRE_MINUTES`.
+  1. In Render service env, verify: `DATABASE_URL`, `JWT_SECRET`, `JWT_ALGORITHM` (optional; defaults to `HS256` in `app/core/security.py`), `ACCESS_TOKEN_EXPIRE_MINUTES`.
   2. Save + restart service, then re-test `/api/v1/auth/login`.
 - **If null/constraint mismatch**
   1. Capture exact failing table/column from stack trace.
@@ -192,7 +192,10 @@ Login example:
 - **If DB revision mismatch**
   1. Compare `alembic_version` value in prod DB vs repository head.
   2. If DB is behind, apply forward migrations only.
-  3. If DB points to orphan revision, repair to nearest valid ancestor, then migrate forward.
+  3. If DB points to orphan revision, run:
+     - `alembic history --verbose` (identify nearest valid ancestor revision)
+     - `alembic stamp <ancestor_revision>`
+     - `alembic upgrade head`
 
 ### Exact next debugging steps
 1. In Render logs, filter by `path="/api/v1/auth/login"` and collect the first traceback for a failing request.
