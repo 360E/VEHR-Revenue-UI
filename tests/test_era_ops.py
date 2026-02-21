@@ -59,7 +59,7 @@ def test_main_upload_http_error(tmp_path: Path, monkeypatch, capsys) -> None:
 
     monkeypatch.setattr(era_ops.request, "urlopen", _raise_http_error)
 
-    exit_code = era_ops.main(["upload", "--file", str(pdf), "--token", "tok"])
+    exit_code = era_ops.main(["upload", "--file", str(pdf), "--base-url", "http://localhost:8000", "--token", "tok"])
 
     assert exit_code == 1
     assert "stage=upload status=400" in capsys.readouterr().err
