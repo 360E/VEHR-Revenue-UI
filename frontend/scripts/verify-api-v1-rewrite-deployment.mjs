@@ -128,7 +128,9 @@ async function fetchDeployedCommitSha() {
     }
   }
 
-  throw new Error(`Unable to resolve deployed commit SHA: ${lastError?.message ?? "unknown error"}`);
+  throw new Error(
+    `Unable to resolve deployed commit SHA from [${versionEndpoints.join(", ")}]: ${lastError?.message ?? "unknown error"}`,
+  );
 }
 
 async function fetchOpenApiSpec() {
@@ -142,7 +144,7 @@ async function fetchOpenApiSpec() {
       lastError = error;
     }
   }
-  throw new Error(`Unable to fetch OpenAPI spec: ${lastError?.message ?? "unknown error"}`);
+  throw new Error(`Unable to fetch OpenAPI spec from [${candidates.join(", ")}]: ${lastError?.message ?? "unknown error"}`);
 }
 
 function assertEraUploadOpenApi(openApiSpec) {
