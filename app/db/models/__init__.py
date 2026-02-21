@@ -71,6 +71,7 @@ from app.db.models.revenue_era import (  # noqa: F401
     RevenueEraValidationReport,
     RevenueEraWorkItem,
 )
+from app.db.models.revenue_external_claim_link import RevenueExternalClaimLink  # noqa: F401
 from app.db.models.rpt_kpi_daily import RptKpiDaily  # noqa: F401
 from app.db.models.rpt_kpi_snapshot import RptKpiSnapshot  # noqa: F401
 from app.db.models.revenue_command_snapshot import RevenueCommandSnapshot  # noqa: F401

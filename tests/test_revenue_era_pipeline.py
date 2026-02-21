@@ -351,7 +351,11 @@ def test_structuring_failure_sets_error_status(tmp_path, monkeypatch) -> None:
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert process.status_code == 502
-            assert process.json() == {"error": "external_service_failure", "stage": "structuring"}
+            assert process.json() == {
+                "error": "external_service_failure",
+                "stage": "structuring",
+                "error_code": "STRUCTURE_UNKNOWN_ERROR",
+            }
 
         with session_factory() as db:
             file_row = db.get(RevenueEraFile, era_id)
@@ -406,7 +410,11 @@ def test_extract_failure_returns_external_service_error_payload(tmp_path, monkey
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert process.status_code == 502
-            assert process.json() == {"error": "external_service_failure", "stage": "extract"}
+            assert process.json() == {
+                "error": "external_service_failure",
+                "stage": "extract",
+                "error_code": "EXTRACT_TIMEOUT",
+            }
 
         with session_factory() as db:
             file_row = db.get(RevenueEraFile, era_id)
@@ -451,7 +459,11 @@ def test_extract_failure_error_detail_is_sanitized(tmp_path, monkeypatch) -> Non
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert process.status_code == 502
-            assert process.json() == {"error": "external_service_failure", "stage": "extract"}
+            assert process.json() == {
+                "error": "external_service_failure",
+                "stage": "extract",
+                "error_code": "EXTRACT_UNKNOWN_ERROR",
+            }
 
         with session_factory() as db:
             file_row = db.get(RevenueEraFile, era_id)
@@ -460,7 +472,7 @@ def test_extract_failure_error_detail_is_sanitized(tmp_path, monkeypatch) -> Non
             assert "John Doe" not in file_row.error_detail
             assert "member_id=12345" not in file_row.error_detail
             detail = json.loads(file_row.error_detail)
-            assert detail["error_code"] == "UNKNOWN_ERROR"
+            assert detail["error_code"] == "EXTRACT_UNKNOWN_ERROR"
             assert detail["exception_type"] == "_PhiLikeError"
             assert detail["stage"] == "extract"
     finally:
@@ -498,7 +510,11 @@ def test_process_phase2_failure_rolls_back_without_commits(tmp_path, monkeypatch
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert process.status_code == 502
-            assert process.json() == {"error": "external_service_failure", "stage": "structuring"}
+            assert process.json() == {
+                "error": "external_service_failure",
+                "stage": "structuring",
+                "error_code": "STRUCTURE_TIMEOUT",
+            }
 
         with session_factory() as db:
             file_row = db.get(RevenueEraFile, era_id)
@@ -793,7 +809,11 @@ def test_process_error_conflict_returns_state_and_diagnostics_endpoint(tmp_path,
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert first.status_code == 502
-            assert first.json() == {"error": "external_service_failure", "stage": "extract"}
+            assert first.json() == {
+                "error": "external_service_failure",
+                "stage": "extract",
+                "error_code": "EXTRACT_TIMEOUT",
+            }
 
             second = client.post(
                 f"/api/v1/revenue/era-pdfs/{era_id}/process",
@@ -821,6 +841,19 @@ def test_process_error_conflict_returns_state_and_diagnostics_endpoint(tmp_path,
             assert body["last_error_stage"] == "extract"
             assert "error_detail" not in body
             assert "exception_type" not in body
+
+            debug = client.get(
+                f"/api/v1/revenue/era-pdfs/{era_id}/debug",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert debug.status_code == 200
+            debug_body = debug.json()
+            assert "extracted_json" not in json.dumps(debug_body)
+            assert "structured_json" not in json.dumps(debug_body)
+            assert debug_body["row_counts"]["extract_results"] == 0
+            safe_error = debug_body["era_file"].get("error_detail_safe_json") or {}
+            assert "error_code" in safe_error
+            assert "stage" in safe_error
     finally:
         app.dependency_overrides.clear()
 
