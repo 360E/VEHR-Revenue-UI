@@ -603,7 +603,19 @@ def process_era_pdf(
     if era_file.status in {STATUS_UPLOADED, STATUS_ERROR} and not extract_row:
         try:
             di_result = _run_with_timeout(run_doc_intel, pdf_path)
-        except (TimeoutError, FuturesTimeoutError, requests.exceptions.Timeout, httpx.TimeoutException, AzureError, Exception) as exc:
+        except (TimeoutError, FuturesTimeoutError, requests.exceptions.Timeout, httpx.TimeoutException) as exc:
+            logger.exception(
+                "external_service_failure",
+                extra={"stage": "extract", "era_file_id": era_file.id, "organization_id": organization.id},
+            )
+            return _external_service_failure("extract", f"extract_failed: {exc}")
+        except AzureError as exc:
+            logger.exception(
+                "external_service_failure",
+                extra={"stage": "extract", "era_file_id": era_file.id, "organization_id": organization.id},
+            )
+            return _external_service_failure("extract", f"extract_failed: {exc}")
+        except Exception as exc:
             logger.exception(
                 "external_service_failure",
                 extra={"stage": "extract", "era_file_id": era_file.id, "organization_id": organization.id},
@@ -648,7 +660,19 @@ def process_era_pdf(
         except ValidationError as exc:
             detail = summarize_validation_error(exc)
             _fail(f"validation_failed: {detail}", status.HTTP_422_UNPROCESSABLE_ENTITY, "structured_validation_failed")
-        except (TimeoutError, FuturesTimeoutError, requests.exceptions.Timeout, httpx.TimeoutException, AzureError, Exception) as exc:
+        except (TimeoutError, FuturesTimeoutError, requests.exceptions.Timeout, httpx.TimeoutException) as exc:
+            logger.exception(
+                "external_service_failure",
+                extra={"stage": "structuring", "era_file_id": era_file.id, "organization_id": organization.id},
+            )
+            return _external_service_failure("structuring", f"structuring_failed: {exc}")
+        except AzureError as exc:
+            logger.exception(
+                "external_service_failure",
+                extra={"stage": "structuring", "era_file_id": era_file.id, "organization_id": organization.id},
+            )
+            return _external_service_failure("structuring", f"structuring_failed: {exc}")
+        except Exception as exc:
             logger.exception(
                 "external_service_failure",
                 extra={"stage": "structuring", "era_file_id": era_file.id, "organization_id": organization.id},

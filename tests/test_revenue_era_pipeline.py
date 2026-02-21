@@ -370,7 +370,11 @@ def test_extract_failure_returns_external_service_error_payload(tmp_path, monkey
     token, _ = _seed_admin(session_factory)
 
     monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(revenue_era, "run_doc_intel", lambda _path: (_ for _ in ()).throw(TimeoutError("timed out")))
+
+    def _timeout_doc_intel(_path: Path):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(revenue_era, "run_doc_intel", _timeout_doc_intel)
 
     try:
         with TestClient(app) as client:
