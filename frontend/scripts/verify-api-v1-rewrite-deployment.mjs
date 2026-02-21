@@ -117,7 +117,7 @@ async function main() {
 
   if (!deployedCommitSha) {
     throw new Error(
-      "DEPLOYED_COMMIT_SHA is required to confirm deployment SHA. Set it from your deployment provider metadata.",
+      "DEPLOYED_COMMIT_SHA is required to confirm deployment SHA (for example VERCEL_GIT_COMMIT_SHA or equivalent deploy metadata).",
     );
   }
   assert.equal(

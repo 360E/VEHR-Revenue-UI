@@ -86,7 +86,7 @@ Requirements:
 3. Confirm `CORS_ALLOWED_ORIGINS` includes the Vercel domain.
 4. Confirm `/health` returns `{"status":"ok"}` on the deployed API.
 5. Bootstrap the first organization/admin via `POST /api/v1/auth/bootstrap`.
-6. Verify frontend `/api → /api/v1` rewrites against the deployed frontend domain:
+6. Verify frontend `/api -> /api/v1` rewrites against the deployed frontend domain:
    ```bash
    cd frontend
    npm run build
