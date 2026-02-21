@@ -414,7 +414,7 @@ def test_structuring_failure_sets_error_status(tmp_path, monkeypatch) -> None:
                 .all()
             )
             assert any(
-                log.stage == "structuring" and "STRUCTURE_SCHEMA_INVALID" in (log.message or "") for log in logs
+                log.stage == "structuring" and "STRUCTURE_AZURE_ERROR" in (log.message or "") for log in logs
             )
     finally:
         app.dependency_overrides.clear()
