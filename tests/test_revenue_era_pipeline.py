@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -338,6 +339,7 @@ def test_structuring_failure_sets_error_status(tmp_path, monkeypatch) -> None:
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert process.status_code == 502
+            assert process.json() == {"error": "external_service_failure", "stage": "structuring"}
 
         with session_factory() as db:
             file_row = db.get(RevenueEraFile, era_id)
@@ -359,7 +361,156 @@ def test_structuring_failure_sets_error_status(tmp_path, monkeypatch) -> None:
                 .scalars()
                 .all()
             )
-            assert any(log.stage == "ERROR" for log in logs)
+            assert any(log.stage == "structuring" for log in logs)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_extract_failure_returns_external_service_error_payload(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, _ = _seed_admin(session_factory)
+
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+
+    def _timeout_doc_intel(_path: Path):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(revenue_era, "run_doc_intel", _timeout_doc_intel)
+
+    try:
+        with TestClient(app) as client:
+            files = [("files", ("era.pdf", b"%PDF-1.4 era", "application/pdf"))]
+            upload = client.post(
+                "/api/v1/revenue/era-pdfs/upload",
+                files=files,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert upload.status_code == 200
+            era_id = upload.json()[0]["id"]
+
+            process = client.post(
+                f"/api/v1/revenue/era-pdfs/{era_id}/process",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert process.status_code == 502
+            assert process.json() == {"error": "external_service_failure", "stage": "extract"}
+
+        with session_factory() as db:
+            file_row = db.get(RevenueEraFile, era_id)
+            assert file_row.status == STATUS_ERROR
+            logs = (
+                db.execute(select(RevenueEraProcessingLog).where(RevenueEraProcessingLog.era_file_id == era_id))
+                .scalars()
+                .all()
+            )
+            assert any(log.stage == "extract" for log in logs)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_extract_failure_error_detail_is_sanitized(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, _ = _seed_admin(session_factory)
+
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+
+    class _PhiLikeError(RuntimeError):
+        pass
+
+    def _phi_exception_doc_intel(_path: Path):
+        raise _PhiLikeError("patient_name=John Doe member_id=12345")
+
+    monkeypatch.setattr(revenue_era, "run_doc_intel", _phi_exception_doc_intel)
+
+    try:
+        with TestClient(app) as client:
+            files = [("files", ("era.pdf", b"%PDF-1.4 era", "application/pdf"))]
+            upload = client.post(
+                "/api/v1/revenue/era-pdfs/upload",
+                files=files,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert upload.status_code == 200
+            era_id = upload.json()[0]["id"]
+
+            process = client.post(
+                f"/api/v1/revenue/era-pdfs/{era_id}/process",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert process.status_code == 502
+            assert process.json() == {"error": "external_service_failure", "stage": "extract"}
+
+        with session_factory() as db:
+            file_row = db.get(RevenueEraFile, era_id)
+            assert file_row.status == STATUS_ERROR
+            assert file_row.error_detail is not None
+            assert "John Doe" not in file_row.error_detail
+            assert "member_id=12345" not in file_row.error_detail
+            detail = json.loads(file_row.error_detail)
+            assert detail["error_code"] == "UNKNOWN_ERROR"
+            assert detail["exception_type"] == "_PhiLikeError"
+            assert detail["stage"] == "extract"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_process_phase2_failure_rolls_back_without_commits(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, org_id = _seed_admin(session_factory)
+    monkeypatch.setenv("PHASE2_VALIDATION", "1")
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+
+    def _fake_docintel(path: Path):
+        return {"model_id": "di-model", "extracted": {"ok": True, "path": str(path)}}
+
+    def _fail_structuring(_payload: dict[str, object]) -> RevenueEraStructuredV1:
+        raise TimeoutError("timed out patient_name=Jane Doe")
+
+    monkeypatch.setattr(revenue_era, "run_doc_intel", _fake_docintel)
+    monkeypatch.setattr(revenue_era, "run_structuring_llm", _fail_structuring)
+
+    try:
+        with TestClient(app) as client:
+            files = [("files", ("era.pdf", b"%PDF-1.4 era", "application/pdf"))]
+            upload = client.post(
+                "/api/v1/revenue/era-pdfs/upload",
+                files=files,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert upload.status_code == 200
+            era_id = upload.json()[0]["id"]
+
+            process = client.post(
+                f"/api/v1/revenue/era-pdfs/{era_id}/process",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert process.status_code == 502
+            assert process.json() == {"error": "external_service_failure", "stage": "structuring"}
+
+        with session_factory() as db:
+            file_row = db.get(RevenueEraFile, era_id)
+            assert file_row.organization_id == org_id
+            assert file_row.status == STATUS_UPLOADED
+            assert file_row.error_detail is None
+            assert (
+                db.execute(select(RevenueEraExtractResult).where(RevenueEraExtractResult.era_file_id == era_id))
+                .scalars()
+                .all()
+                == []
+            )
+            assert (
+                db.execute(select(RevenueEraStructuredResult).where(RevenueEraStructuredResult.era_file_id == era_id))
+                .scalars()
+                .all()
+                == []
+            )
+            logs = (
+                db.execute(select(RevenueEraProcessingLog).where(RevenueEraProcessingLog.era_file_id == era_id))
+                .scalars()
+                .all()
+            )
+            assert {log.stage for log in logs} == {"UPLOAD"}
+            assert all("Jane Doe" not in (log.message or "") for log in logs)
     finally:
         app.dependency_overrides.clear()
 
