@@ -16,22 +16,14 @@ class VersionResponse(BaseModel):
     commit_sha: str
 
 
-# --- Absolute paths (no prefix dependency) ---
-
 @router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(ok=True)
 
 
+# This will become /api/v1/version because of the router prefix
 @router.get("/version", response_model=VersionResponse)
-def version_root() -> VersionResponse:
-    return VersionResponse(
-        commit_sha=os.getenv("COMMIT_SHA", "").strip() or "unknown"
-    )
-
-
-#  
-def version_explicit() -> VersionResponse:
+def version() -> VersionResponse:
     return VersionResponse(
         commit_sha=os.getenv("COMMIT_SHA", "").strip() or "unknown"
     )
