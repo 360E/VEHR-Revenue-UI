@@ -1,7 +1,6 @@
-from __future__ import annotations
-
-import os
 import logging
+import os
+import json
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import date, datetime
 from pathlib import Path
@@ -525,6 +524,7 @@ def process_era_pdf(
     _: None = Depends(require_permission("billing:write")),
 ) -> EraFileResponse:
     timeout_seconds = 30
+    validation_mode = phase2_validation_enabled()
     era_file = (
         db.execute(
             select(RevenueEraFile)
@@ -567,14 +567,20 @@ def process_era_pdf(
         era_file.status = STATUS_ERROR
         era_file.error_detail = "invalid_status"
         record_processing_log(db, era_file_id=era_file.id, stage="ERROR", message="invalid_status", commit=False)
-        db.commit()
+        if validation_mode:
+            db.rollback()
+        else:
+            db.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_status")
 
     def _fail(message: str, http_status: int, detail: str) -> None:
         era_file.status = STATUS_ERROR
         era_file.error_detail = message[:500]
         record_processing_log(db, era_file_id=era_file.id, stage="ERROR", message=message, commit=False)
-        db.commit()
+        if validation_mode:
+            db.rollback()
+        else:
+            db.commit()
         raise HTTPException(status_code=http_status, detail=detail)
 
     def _run_with_timeout(func, *args):
@@ -582,11 +588,36 @@ def process_era_pdf(
             future = executor.submit(func, *args)
             return future.result(timeout=timeout_seconds)
 
-    def _external_service_failure(stage: str, message: str) -> JSONResponse:
+    def _exception_request_id(exc: Exception) -> str | None:
+        request_id = getattr(exc, "request_id", None)
+        if request_id:
+            return str(request_id)
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers:
+            return headers.get("x-ms-request-id") or headers.get("x-request-id")
+        return None
+
+    def _external_service_failure(stage: str, error_code: str, exc: Exception) -> JSONResponse:
+        safe_error = {
+            "error_code": error_code,
+            "exception_type": exc.__class__.__name__,
+            "stage": stage,
+            "request_id": _exception_request_id(exc),
+        }
         era_file.status = STATUS_ERROR
-        era_file.error_detail = message[:500]
-        record_processing_log(db, era_file_id=era_file.id, stage=stage, message=message, commit=False)
-        db.commit()
+        era_file.error_detail = json.dumps(safe_error, separators=(",", ":"), ensure_ascii=True)
+        record_processing_log(
+            db,
+            era_file_id=era_file.id,
+            stage=stage,
+            message=f"error_code={error_code}; exception_type={safe_error['exception_type']}; request_id={safe_error['request_id'] or ''}",
+            commit=False,
+        )
+        if validation_mode:
+            db.rollback()
+        else:
+            db.commit()
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={"error": "external_service_failure", "stage": stage},
@@ -604,23 +635,44 @@ def process_era_pdf(
         try:
             di_result = _run_with_timeout(run_doc_intel, pdf_path)
         except (TimeoutError, FuturesTimeoutError, requests.exceptions.Timeout, httpx.TimeoutException) as exc:
-            logger.exception(
+            logger.error(
                 "external_service_failure",
-                extra={"stage": "extract", "era_file_id": era_file.id, "organization_id": organization.id},
+                extra={
+                    "stage": "extract",
+                    "era_file_id": era_file.id,
+                    "organization_id": organization.id,
+                    "error_code": "EXTRACT_TIMEOUT",
+                    "exception_type": exc.__class__.__name__,
+                    "request_id": _exception_request_id(exc),
+                },
             )
-            return _external_service_failure("extract", f"extract_failed: {exc}")
+            return _external_service_failure("extract", "EXTRACT_TIMEOUT", exc)
         except AzureError as exc:
-            logger.exception(
+            logger.error(
                 "external_service_failure",
-                extra={"stage": "extract", "era_file_id": era_file.id, "organization_id": organization.id},
+                extra={
+                    "stage": "extract",
+                    "era_file_id": era_file.id,
+                    "organization_id": organization.id,
+                    "error_code": "AZURE_ERROR",
+                    "exception_type": exc.__class__.__name__,
+                    "request_id": _exception_request_id(exc),
+                },
             )
-            return _external_service_failure("extract", f"extract_failed: {exc}")
+            return _external_service_failure("extract", "AZURE_ERROR", exc)
         except Exception as exc:
-            logger.exception(
+            logger.error(
                 "external_service_failure",
-                extra={"stage": "extract", "era_file_id": era_file.id, "organization_id": organization.id},
+                extra={
+                    "stage": "extract",
+                    "era_file_id": era_file.id,
+                    "organization_id": organization.id,
+                    "error_code": "UNKNOWN_ERROR",
+                    "exception_type": exc.__class__.__name__,
+                    "request_id": _exception_request_id(exc),
+                },
             )
-            return _external_service_failure("extract", f"extract_failed: {exc}")
+            return _external_service_failure("extract", "UNKNOWN_ERROR", exc)
 
         extracted_payload = di_result.get("extracted") or {}
         page_count = 0
@@ -661,23 +713,44 @@ def process_era_pdf(
             detail = summarize_validation_error(exc)
             _fail(f"validation_failed: {detail}", status.HTTP_422_UNPROCESSABLE_ENTITY, "structured_validation_failed")
         except (TimeoutError, FuturesTimeoutError, requests.exceptions.Timeout, httpx.TimeoutException) as exc:
-            logger.exception(
+            logger.error(
                 "external_service_failure",
-                extra={"stage": "structuring", "era_file_id": era_file.id, "organization_id": organization.id},
+                extra={
+                    "stage": "structuring",
+                    "era_file_id": era_file.id,
+                    "organization_id": organization.id,
+                    "error_code": "STRUCTURE_TIMEOUT",
+                    "exception_type": exc.__class__.__name__,
+                    "request_id": _exception_request_id(exc),
+                },
             )
-            return _external_service_failure("structuring", f"structuring_failed: {exc}")
+            return _external_service_failure("structuring", "STRUCTURE_TIMEOUT", exc)
         except AzureError as exc:
-            logger.exception(
+            logger.error(
                 "external_service_failure",
-                extra={"stage": "structuring", "era_file_id": era_file.id, "organization_id": organization.id},
+                extra={
+                    "stage": "structuring",
+                    "era_file_id": era_file.id,
+                    "organization_id": organization.id,
+                    "error_code": "AZURE_ERROR",
+                    "exception_type": exc.__class__.__name__,
+                    "request_id": _exception_request_id(exc),
+                },
             )
-            return _external_service_failure("structuring", f"structuring_failed: {exc}")
+            return _external_service_failure("structuring", "AZURE_ERROR", exc)
         except Exception as exc:
-            logger.exception(
+            logger.error(
                 "external_service_failure",
-                extra={"stage": "structuring", "era_file_id": era_file.id, "organization_id": organization.id},
+                extra={
+                    "stage": "structuring",
+                    "era_file_id": era_file.id,
+                    "organization_id": organization.id,
+                    "error_code": "UNKNOWN_ERROR",
+                    "exception_type": exc.__class__.__name__,
+                    "request_id": _exception_request_id(exc),
+                },
             )
-            return _external_service_failure("structuring", f"structuring_failed: {exc}")
+            return _external_service_failure("structuring", "UNKNOWN_ERROR", exc)
 
         db.execute(delete(RevenueEraStructuredResult).where(RevenueEraStructuredResult.era_file_id == era_file.id))
         structured_row = RevenueEraStructuredResult(
