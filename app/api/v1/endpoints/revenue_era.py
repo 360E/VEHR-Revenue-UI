@@ -1,6 +1,6 @@
+import json
 import logging
 import os
-import json
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import date, datetime
 from pathlib import Path

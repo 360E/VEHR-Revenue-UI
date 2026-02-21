@@ -510,6 +510,7 @@ def test_process_phase2_failure_rolls_back_without_commits(tmp_path, monkeypatch
                 .all()
             )
             assert {log.stage for log in logs} == {"UPLOAD"}
+            assert all("Jane Doe" not in (log.message or "") for log in logs)
     finally:
         app.dependency_overrides.clear()
 
