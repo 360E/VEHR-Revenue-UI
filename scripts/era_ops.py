@@ -162,7 +162,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--email", default=os.getenv("VEHR_EMAIL", "admin@example.com"))
     ingest.add_argument("--password", default=os.getenv("VEHR_PASSWORD", "ChangeMeNow!"))
     ingest.add_argument("--watch", action="store_true", help="Watch folder for new PDFs")
-    ingest.add_argument("--poll-seconds", type=float, default=2.0)
+    ingest.add_argument("--poll-seconds", type=float, default=2.0, help="Watch poll interval seconds (minimum 0.2)")
 
     upload = sub.add_parser("upload", help="Upload an ERA PDF")
     upload.add_argument("--file", required=True, help="Path to ERA PDF")
@@ -198,8 +198,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if failure_count == 0 else 1
 
         seen = set(_iter_pdf_files(directory))
+        last_login = time.monotonic()
         print(f"watching dir={directory} poll_seconds={args.poll_seconds}")
         while True:
+            if time.monotonic() - last_login >= 300:
+                status, refreshed_token, _ = _login(args.base_url, email=args.email, password=args.password)
+                if status == 200 and refreshed_token:
+                    token = refreshed_token
+                    last_login = time.monotonic()
             current = _iter_pdf_files(directory)
             new_files = [path for path in current if path not in seen]
             for file_path in new_files:
