@@ -6,6 +6,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -464,6 +465,39 @@ def test_extract_failure_returns_external_service_error_payload(tmp_path, monkey
         app.dependency_overrides.clear()
 
 
+def test_extract_http_error_returns_external_service_error_payload(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, _ = _seed_admin(session_factory)
+
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(revenue_era, "run_doc_intel", lambda _path: (_ for _ in ()).throw(httpx.HTTPError("boom")))
+
+    try:
+        with TestClient(app) as client:
+            files = [("files", ("era.pdf", b"%PDF-1.4 era", "application/pdf"))]
+            upload = client.post(
+                "/api/v1/revenue/era-pdfs/upload",
+                files=files,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert upload.status_code == 200
+            era_id = upload.json()[0]["id"]
+
+            process = client.post(
+                f"/api/v1/revenue/era-pdfs/{era_id}/process",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert process.status_code == 502
+            assert process.json() == {
+                "error": "external_service_failure",
+                "stage": "extract",
+                "error_code": "EXTRACT_HTTP_ERROR",
+                "request_id": None,
+            }
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_extract_failure_error_detail_is_sanitized(tmp_path, monkeypatch) -> None:
     session_factory = _setup_sqlite(tmp_path)
     token, _ = _seed_admin(session_factory)
@@ -644,6 +678,39 @@ def test_validation_failure_sets_error_status_and_logs(tmp_path, monkeypatch) ->
                 .all()
             )
             assert any(log.stage == "ERROR" for log in logs)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_structuring_http_error_returns_external_service_error_payload(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, _ = _seed_admin(session_factory)
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(revenue_era, "run_doc_intel", lambda path: {"model_id": "x", "extracted": {"ok": True}})
+    monkeypatch.setattr(revenue_era, "run_structuring_llm", lambda payload: (_ for _ in ()).throw(httpx.HTTPError("boom")))
+
+    try:
+        with TestClient(app) as client:
+            files = [("files", ("era.pdf", b"%PDF-1.4 era", "application/pdf"))]
+            upload = client.post(
+                "/api/v1/revenue/era-pdfs/upload",
+                files=files,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert upload.status_code == 200
+            era_id = upload.json()[0]["id"]
+
+            process = client.post(
+                f"/api/v1/revenue/era-pdfs/{era_id}/process",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert process.status_code == 502
+            assert process.json() == {
+                "error": "external_service_failure",
+                "stage": "structuring",
+                "error_code": "STRUCTURE_HTTP_ERROR",
+                "request_id": None,
+            }
     finally:
         app.dependency_overrides.clear()
 

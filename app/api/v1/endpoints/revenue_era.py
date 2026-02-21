@@ -835,7 +835,7 @@ def process_era_pdf(
             db,
             era_file_id=era_file.id,
             stage=stage,
-            message=f"error_code={error_code}; exception_type=ValidationError; request_id=",
+            message=f"error_code={error_code}; exception_type=ValidationError; request_id=None",
             commit=False,
         )
         db.commit()
@@ -1153,11 +1153,13 @@ def get_era_debug(
             EraDebugLogResponse(created_at=row.created_at, stage=row.stage, message=row.message) for row in latest_logs
         ],
         row_counts=counts,
-        durations_ms={
-            "stage_duration": int((era_file.stage_completed_at - era_file.stage_started_at).total_seconds() * 1000)
-        }
-        if era_file.stage_started_at and era_file.stage_completed_at
-        else None,
+        durations_ms=(
+            {
+                "stage_duration": int((era_file.stage_completed_at - era_file.stage_started_at).total_seconds() * 1000)
+            }
+            if era_file.stage_started_at and era_file.stage_completed_at
+            else None
+        ),
     )
 
 
