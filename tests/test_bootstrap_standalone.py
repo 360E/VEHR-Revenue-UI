@@ -82,3 +82,20 @@ def test_bootstrap_is_idempotent_and_allows_login(tmp_path, monkeypatch) -> None
             assert len(memberships) == 1
     finally:
         app.dependency_overrides.clear()
+
+
+def test_bootstrap_defaults_enabled_in_local_dev_mode(tmp_path, monkeypatch) -> None:
+    _setup_sqlite(tmp_path)
+    monkeypatch.delenv("BOOTSTRAP_ENABLED", raising=False)
+    monkeypatch.setenv("LOCAL_DEV", "1")
+    payload = {
+        "organization_name": "Local Dev Org",
+        "admin_email": "admin@localdev.example",
+        "admin_password": "Password123!",
+    }
+    try:
+        with TestClient(app) as client:
+            response = client.post("/api/v1/bootstrap", json=payload)
+            assert response.status_code == 201
+    finally:
+        app.dependency_overrides.clear()

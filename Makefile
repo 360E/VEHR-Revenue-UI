@@ -8,7 +8,9 @@ migrate:
 	alembic upgrade head
 
 run:
-	python -m uvicorn app.main:app --reload
+	uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+dev: db-up migrate run
 
 test:
 	pytest -m "not postgres"

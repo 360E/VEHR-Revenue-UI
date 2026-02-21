@@ -457,7 +457,7 @@ def bootstrap(request: BootstrapRequest, db: Session = Depends(get_db)) -> Token
 
 @router.post("/bootstrap", response_model=StandaloneBootstrapResponse, status_code=status.HTTP_201_CREATED)
 def standalone_bootstrap(request: BootstrapRequest, db: Session = Depends(get_db)) -> StandaloneBootstrapResponse:
-    if not env_default_bool("BOOTSTRAP_ENABLED", False):
+    if not env_default_bool("BOOTSTRAP_ENABLED", env_default_bool("LOCAL_DEV", False)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
 
     org_name = request.organization_name.strip()
