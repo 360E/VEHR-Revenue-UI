@@ -2,25 +2,16 @@ import json
 import logging
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, List
 from uuid import uuid4
 
-import httpx
-import requests
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
-
-try:
-    from azure.core.exceptions import AzureError
-except Exception:  # pragma: no cover - fallback when azure libs are unavailable in local test env
-    class AzureError(Exception):
-        pass
 
 from app.core.deps import get_current_membership, get_current_organization, require_permission
 from app.core.time import utc_now
@@ -68,6 +59,7 @@ from app.services.revenue_era import (
     summarize_validation_error,
 )
 from app.services.storage import sanitize_filename
+from infrastructure.azure_client import AzureClientError
 
 router = APIRouter(tags=["Revenue ERA"])
 logger = logging.getLogger(__name__)
@@ -80,6 +72,7 @@ class EraFileResponse(BaseModel):
     payer_name_raw: str | None = None
     received_date: date | None = None
     error_detail: str | None = None
+    request_id: str | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -623,13 +616,19 @@ def list_era_pdfs(
 @router.post("/revenue/era-pdfs/{era_file_id}/process", response_model=EraFileResponse)
 def process_era_pdf(
     era_file_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     organization=Depends(get_current_organization),
     membership: OrganizationMembership = Depends(get_current_membership),
     retry: bool = False,
     _: None = Depends(require_permission("billing:write")),
 ) -> EraFileResponse:
-    timeout_seconds = 30
+    request_id = (
+        request.headers.get("x-request-id")
+        or request.headers.get("x-requestid")
+        or request.headers.get("x-correlation-id")
+        or str(uuid4())
+    )
 
     def _locked_era_file() -> RevenueEraFile:
         row = (
@@ -769,32 +768,10 @@ def process_era_pdf(
         db.commit()
         raise HTTPException(status_code=http_status, detail=detail)
 
-    def _run_with_timeout(func, *args):
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(func, *args)
-            return future.result(timeout=timeout_seconds)
-
-    def _exception_request_id(exc: Exception) -> str | None:
-        request_id = getattr(exc, "request_id", None)
-        if request_id:
-            return str(request_id)
-        response = getattr(exc, "response", None)
-        headers = getattr(response, "headers", None)
-        if headers:
-            return (
-                headers.get("x-ms-request-id")
-                or headers.get("x-request-id")
-                or headers.get("apim-request-id")
-                or headers.get("x-ms-client-request-id")
-            )
-        return None
-
-    def _external_service_failure(stage: str, error_code: str, exc: Exception) -> JSONResponse:
+    def _external_service_failure(stage: str, error_code: str) -> JSONResponse:
         era_file = _locked_era_file()
-        request_id = _exception_request_id(exc)
         safe_error = {
             "error_code": error_code,
-            "exception_type": exc.__class__.__name__,
             "stage": stage,
             "request_id": request_id,
         }
@@ -808,48 +785,21 @@ def process_era_pdf(
             db,
             era_file_id=era_file.id,
             stage=stage,
-            message=f"error_code={error_code}; exception_type={safe_error['exception_type']}; request_id={safe_error['request_id'] or ''}",
+            message=f"error_code={error_code}; request_id={safe_error['request_id']}",
             commit=False,
         )
         db.commit()
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={
-                "error": "external_service_failure",
+                "error": "upstream_failure",
                 "stage": stage,
                 "error_code": error_code,
                 "request_id": request_id,
             },
         )
 
-    def _schema_invalid_failure(stage: str, error_code: str) -> JSONResponse:
-        era_file = _locked_era_file()
-        safe_error = {"error_code": error_code, "exception_type": "ValidationError", "stage": stage, "request_id": None}
-        _set_status(era_file, STATUS_ERROR)
-        era_file.last_error_stage = stage
-        era_file.current_stage = stage
-        if era_file.stage_started_at and era_file.stage_completed_at is None:
-            era_file.stage_completed_at = utc_now()
-        era_file.error_detail = json.dumps(safe_error, separators=(",", ":"), ensure_ascii=True)
-        record_processing_log(
-            db,
-            era_file_id=era_file.id,
-            stage=stage,
-            message=f"error_code={error_code}; exception_type=ValidationError; request_id=None",
-            commit=False,
-        )
-        db.commit()
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={
-                "error": "structured_schema_invalid",
-                "stage": stage,
-                "error_code": error_code,
-                "request_id": None,
-            },
-        )
-
-    def _log_process_failure(stage: str, error_code: str, exc: Exception, *, duration_ms: int) -> None:
+    def _log_process_failure(stage: str, error_code: str, *, duration_ms: int) -> None:
         logger.error(
             "era_process_failed",
             extra={
@@ -858,11 +808,25 @@ def process_era_pdf(
                 "era_file_id": era_file.id,
                 "organization_id": organization.id,
                 "error_code": error_code,
-                "exception_type": exc.__class__.__name__,
-                "request_id": _exception_request_id(exc),
+                "request_id": request_id,
                 "duration_ms": duration_ms,
             },
         )
+
+    def _invoke_with_request_id(func, *args):
+        try:
+            return func(*args, request_id=request_id)
+        except TypeError as exc:
+            if "request_id" not in str(exc):
+                raise
+            return func(*args)
+
+    def _fallback_error_code(exc: Exception) -> str:
+        if isinstance(exc, TimeoutError):
+            return "azure_timeout"
+        if isinstance(exc, ValidationError):
+            return "azure_invalid_response"
+        return "azure_unavailable"
 
     era_file.error_detail = None
     _set_status(era_file, STATUS_PROCESSING_EXTRACT)
@@ -874,23 +838,16 @@ def process_era_pdf(
 
     extract_started_at = time.perf_counter()
     try:
-        di_result = _run_with_timeout(run_doc_intel, pdf_path)
-    except (TimeoutError, FuturesTimeoutError, requests.exceptions.Timeout, httpx.TimeoutException) as exc:
+        di_result = _invoke_with_request_id(run_doc_intel, pdf_path)
+    except AzureClientError as exc:
         duration_ms = int((time.perf_counter() - extract_started_at) * 1000)
-        _log_process_failure("extract", "EXTRACT_TIMEOUT", exc, duration_ms=duration_ms)
-        return _external_service_failure("extract", "EXTRACT_TIMEOUT", exc)
-    except (requests.exceptions.RequestException, httpx.HTTPError) as exc:
-        duration_ms = int((time.perf_counter() - extract_started_at) * 1000)
-        _log_process_failure("extract", "EXTRACT_HTTP_ERROR", exc, duration_ms=duration_ms)
-        return _external_service_failure("extract", "EXTRACT_HTTP_ERROR", exc)
-    except AzureError as exc:
-        duration_ms = int((time.perf_counter() - extract_started_at) * 1000)
-        _log_process_failure("extract", "EXTRACT_AZURE_ERROR", exc, duration_ms=duration_ms)
-        return _external_service_failure("extract", "EXTRACT_AZURE_ERROR", exc)
+        _log_process_failure(exc.stage, exc.error_code, duration_ms=duration_ms)
+        return _external_service_failure(exc.stage, exc.error_code)
     except Exception as exc:
         duration_ms = int((time.perf_counter() - extract_started_at) * 1000)
-        _log_process_failure("extract", "EXTRACT_AZURE_ERROR", exc, duration_ms=duration_ms)
-        return _external_service_failure("extract", "EXTRACT_AZURE_ERROR", exc)
+        error_code = _fallback_error_code(exc)
+        _log_process_failure("document_intelligence_extract", error_code, duration_ms=duration_ms)
+        return _external_service_failure("document_intelligence_extract", error_code)
 
     extracted_payload = di_result.get("extracted") or {}
     page_count = 0
@@ -945,38 +902,16 @@ def process_era_pdf(
         _fail("extract", "extract_missing", status.HTTP_400_BAD_REQUEST, "extract_missing")
     structuring_started_at = time.perf_counter()
     try:
-        structured = _run_with_timeout(run_structuring_llm, extract_row.extracted_json)
-    except ValidationError:
+        structured = _invoke_with_request_id(run_structuring_llm, extract_row.extracted_json)
+    except AzureClientError as exc:
         duration_ms = int((time.perf_counter() - structuring_started_at) * 1000)
-        logger.error(
-            "era_process_failed",
-            extra={
-                "event": "era_process_failed",
-                "stage": "structuring",
-                "era_file_id": era_file.id,
-                "organization_id": organization.id,
-                "error_code": "STRUCTURE_SCHEMA_INVALID",
-                "request_id": None,
-                "duration_ms": duration_ms,
-            },
-        )
-        return _schema_invalid_failure("structuring", "STRUCTURE_SCHEMA_INVALID")
-    except (TimeoutError, FuturesTimeoutError, requests.exceptions.Timeout, httpx.TimeoutException) as exc:
-        duration_ms = int((time.perf_counter() - structuring_started_at) * 1000)
-        _log_process_failure("structuring", "STRUCTURE_TIMEOUT", exc, duration_ms=duration_ms)
-        return _external_service_failure("structuring", "STRUCTURE_TIMEOUT", exc)
-    except (requests.exceptions.RequestException, httpx.HTTPError) as exc:
-        duration_ms = int((time.perf_counter() - structuring_started_at) * 1000)
-        _log_process_failure("structuring", "STRUCTURE_HTTP_ERROR", exc, duration_ms=duration_ms)
-        return _external_service_failure("structuring", "STRUCTURE_HTTP_ERROR", exc)
-    except AzureError as exc:
-        duration_ms = int((time.perf_counter() - structuring_started_at) * 1000)
-        _log_process_failure("structuring", "STRUCTURE_AZURE_ERROR", exc, duration_ms=duration_ms)
-        return _external_service_failure("structuring", "STRUCTURE_AZURE_ERROR", exc)
+        _log_process_failure(exc.stage, exc.error_code, duration_ms=duration_ms)
+        return _external_service_failure(exc.stage, exc.error_code)
     except Exception as exc:
         duration_ms = int((time.perf_counter() - structuring_started_at) * 1000)
-        _log_process_failure("structuring", "STRUCTURE_AZURE_ERROR", exc, duration_ms=duration_ms)
-        return _external_service_failure("structuring", "STRUCTURE_AZURE_ERROR", exc)
+        error_code = _fallback_error_code(exc)
+        _log_process_failure("openai_structuring", error_code, duration_ms=duration_ms)
+        return _external_service_failure("openai_structuring", error_code)
 
     era_file = _locked_era_file()
     if era_file.status != STATUS_PROCESSING_STRUCTURING:
@@ -1051,7 +986,7 @@ def process_era_pdf(
         era_file_id=final_row.id,
         action="era_pdf_processed",
     )
-    return final_row
+    return EraFileResponse.model_validate(final_row).model_copy(update={"request_id": request_id})
 
 
 @router.get("/revenue/era-pdfs/{era_file_id}/diagnostics", response_model=EraProcessDiagnosticsResponse)

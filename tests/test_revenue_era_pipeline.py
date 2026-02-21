@@ -5,6 +5,7 @@ import threading
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from uuid import UUID
 
 import httpx
 import pytest
@@ -385,17 +386,16 @@ def test_structuring_failure_sets_error_status(tmp_path, monkeypatch) -> None:
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert process.status_code == 502
-            assert process.json() == {
-                "error": "external_service_failure",
-                "stage": "structuring",
-                "error_code": "STRUCTURE_AZURE_ERROR",
-                "request_id": None,
-            }
+            body = process.json()
+            assert body["error"] == "upstream_failure"
+            assert body["stage"] == "openai_structuring"
+            assert body["error_code"] == "azure_unavailable"
+            assert body["request_id"]
 
         with session_factory() as db:
             file_row = db.get(RevenueEraFile, era_id)
             assert file_row.status == STATUS_ERROR
-            assert file_row.last_error_stage == "structuring"
+            assert file_row.last_error_stage == "openai_structuring"
             lines = (
                 db.execute(select(RevenueEraClaimLine).where(RevenueEraClaimLine.era_file_id == era_id))
                 .scalars()
@@ -414,7 +414,7 @@ def test_structuring_failure_sets_error_status(tmp_path, monkeypatch) -> None:
                 .all()
             )
             assert any(
-                log.stage == "structuring" and "STRUCTURE_AZURE_ERROR" in (log.message or "") for log in logs
+                log.stage == "openai_structuring" and "azure_unavailable" in (log.message or "") for log in logs
             )
     finally:
         app.dependency_overrides.clear()
@@ -447,12 +447,11 @@ def test_extract_failure_returns_external_service_error_payload(tmp_path, monkey
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert process.status_code == 502
-            assert process.json() == {
-                "error": "external_service_failure",
-                "stage": "extract",
-                "error_code": "EXTRACT_TIMEOUT",
-                "request_id": None,
-            }
+            body = process.json()
+            assert body["error"] == "upstream_failure"
+            assert body["stage"] == "document_intelligence_extract"
+            assert body["error_code"] == "azure_timeout"
+            assert body["request_id"]
 
         with session_factory() as db:
             file_row = db.get(RevenueEraFile, era_id)
@@ -462,7 +461,7 @@ def test_extract_failure_returns_external_service_error_payload(tmp_path, monkey
                 .scalars()
                 .all()
             )
-            assert any(log.stage == "extract" for log in logs)
+            assert any(log.stage == "document_intelligence_extract" for log in logs)
     finally:
         app.dependency_overrides.clear()
 
@@ -490,12 +489,11 @@ def test_extract_http_error_returns_external_service_error_payload(tmp_path, mon
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert process.status_code == 502
-            assert process.json() == {
-                "error": "external_service_failure",
-                "stage": "extract",
-                "error_code": "EXTRACT_HTTP_ERROR",
-                "request_id": None,
-            }
+            body = process.json()
+            assert body["error"] == "upstream_failure"
+            assert body["stage"] == "document_intelligence_extract"
+            assert body["error_code"] == "azure_unavailable"
+            assert body["request_id"]
     finally:
         app.dependency_overrides.clear()
 
@@ -530,12 +528,11 @@ def test_extract_failure_error_detail_is_sanitized(tmp_path, monkeypatch) -> Non
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert process.status_code == 502
-            assert process.json() == {
-                "error": "external_service_failure",
-                "stage": "extract",
-                "error_code": "EXTRACT_AZURE_ERROR",
-                "request_id": None,
-            }
+            body = process.json()
+            assert body["error"] == "upstream_failure"
+            assert body["stage"] == "document_intelligence_extract"
+            assert body["error_code"] == "azure_unavailable"
+            assert body["request_id"]
 
         with session_factory() as db:
             file_row = db.get(RevenueEraFile, era_id)
@@ -544,9 +541,9 @@ def test_extract_failure_error_detail_is_sanitized(tmp_path, monkeypatch) -> Non
             assert "John Doe" not in file_row.error_detail
             assert "member_id=12345" not in file_row.error_detail
             detail = json.loads(file_row.error_detail)
-            assert detail["error_code"] == "EXTRACT_AZURE_ERROR"
-            assert detail["exception_type"] == "_PhiLikeError"
-            assert detail["stage"] == "extract"
+            assert detail["error_code"] == "azure_unavailable"
+            assert "exception_type" not in detail
+            assert detail["stage"] == "document_intelligence_extract"
     finally:
         app.dependency_overrides.clear()
 
@@ -582,12 +579,11 @@ def test_process_phase2_failure_rolls_back_without_commits(tmp_path, monkeypatch
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert process.status_code == 502
-            assert process.json() == {
-                "error": "external_service_failure",
-                "stage": "structuring",
-                "error_code": "STRUCTURE_TIMEOUT",
-                "request_id": None,
-            }
+            body = process.json()
+            assert body["error"] == "upstream_failure"
+            assert body["stage"] == "openai_structuring"
+            assert body["error_code"] == "azure_timeout"
+            assert body["request_id"]
 
         with session_factory() as db:
             file_row = db.get(RevenueEraFile, era_id)
@@ -651,13 +647,12 @@ def test_validation_failure_sets_error_status_and_logs(tmp_path, monkeypatch) ->
                 f"/api/v1/revenue/era-pdfs/{era_id}/process",
                 headers={"Authorization": f"Bearer {token}"},
             )
-            assert process.status_code == 422
-            assert process.json() == {
-                "error": "structured_schema_invalid",
-                "stage": "structuring",
-                "error_code": "STRUCTURE_SCHEMA_INVALID",
-                "request_id": None,
-            }
+            assert process.status_code == 502
+            body = process.json()
+            assert body["error"] == "upstream_failure"
+            assert body["stage"] == "openai_structuring"
+            assert body["error_code"] == "azure_invalid_response"
+            assert body["request_id"]
 
         with session_factory() as db:
             file_row = db.get(RevenueEraFile, era_id)
@@ -679,7 +674,7 @@ def test_validation_failure_sets_error_status_and_logs(tmp_path, monkeypatch) ->
                 .scalars()
                 .all()
             )
-            assert any(log.stage == "structuring" for log in logs)
+            assert any(log.stage == "openai_structuring" for log in logs)
     finally:
         app.dependency_overrides.clear()
 
@@ -707,12 +702,11 @@ def test_structuring_http_error_returns_external_service_error_payload(tmp_path,
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert process.status_code == 502
-            assert process.json() == {
-                "error": "external_service_failure",
-                "stage": "structuring",
-                "error_code": "STRUCTURE_HTTP_ERROR",
-                "request_id": None,
-            }
+            body = process.json()
+            assert body["error"] == "upstream_failure"
+            assert body["stage"] == "openai_structuring"
+            assert body["error_code"] == "azure_unavailable"
+            assert body["request_id"]
     finally:
         app.dependency_overrides.clear()
 
@@ -921,19 +915,18 @@ def test_process_error_conflict_returns_state_and_diagnostics_endpoint(tmp_path,
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert first.status_code == 502
-            assert first.json() == {
-                "error": "external_service_failure",
-                "stage": "extract",
-                "error_code": "EXTRACT_TIMEOUT",
-                "request_id": None,
-            }
+            first_body = first.json()
+            assert first_body["error"] == "upstream_failure"
+            assert first_body["stage"] == "document_intelligence_extract"
+            assert first_body["error_code"] == "azure_timeout"
+            assert first_body["request_id"]
 
             second = client.post(
                 f"/api/v1/revenue/era-pdfs/{era_id}/process",
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert second.status_code == 502
-            assert second.json()["error_code"] == "EXTRACT_TIMEOUT"
+            assert second.json()["error_code"] == "azure_timeout"
 
             diagnostics = client.get(
                 f"/api/v1/revenue/era-pdfs/{era_id}/diagnostics",
@@ -946,8 +939,8 @@ def test_process_error_conflict_returns_state_and_diagnostics_endpoint(tmp_path,
             assert body["retry_required"] is True
             assert body["has_extract_result"] is False
             assert body["has_structured_result"] is False
-            assert body["last_error_code"] == "EXTRACT_TIMEOUT"
-            assert body["last_error_stage"] == "extract"
+            assert body["last_error_code"] == "azure_timeout"
+            assert body["last_error_stage"] == "document_intelligence_extract"
             assert "error_detail" not in body
             assert "exception_type" not in body
 
@@ -1286,7 +1279,7 @@ def test_retry_resets_pipeline_and_reprocesses(tmp_path, monkeypatch) -> None:
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert blocked.status_code == 502
-            assert blocked.json()["error_code"] == "EXTRACT_TIMEOUT"
+            assert blocked.json()["error_code"] == "azure_timeout"
 
         with session_factory() as db:
             db.add(
@@ -1716,5 +1709,56 @@ def test_worklist_sorting_is_deterministic_with_tiebreaker(tmp_path, monkeypatch
             payload = response.json()
             assert payload[0]["claim_ref"] == "A"
             assert payload[1]["claim_ref"] == "B"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_process_response_includes_request_id(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, _ = _seed_admin(session_factory)
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+
+    def _docintel(_path: Path):
+        return {"model_id": "di-model", "request_id": "upstream-1", "extracted": {"ok": True}}
+
+    structured = RevenueEraStructuredV1(
+        payer_name="Payer One",
+        claim_lines=[RevenueEraStructuredLine(claim_ref="CLM123", match_status=MATCH_UNMATCHED)],
+    )
+    monkeypatch.setattr(revenue_era, "run_doc_intel", _docintel)
+    monkeypatch.setattr(revenue_era, "run_structuring_llm", lambda payload: structured)
+
+    try:
+        with TestClient(app) as client:
+            upload = client.post(
+                "/api/v1/revenue/era-pdfs/upload",
+                files=[("files", ("era.pdf", b"%PDF-1.4 era", "application/pdf"))],
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert upload.status_code == 200
+            era_id = upload.json()[0]["id"]
+
+            process = client.post(
+                f"/api/v1/revenue/era-pdfs/{era_id}/process",
+                headers={"Authorization": f"Bearer {token}", "x-request-id": "req-fixed-1"},
+            )
+            assert process.status_code == 200
+            assert process.json()["request_id"] == "req-fixed-1"
+
+            upload_second = client.post(
+                "/api/v1/revenue/era-pdfs/upload",
+                files=[("files", ("era2.pdf", b"%PDF-1.4 era-2", "application/pdf"))],
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert upload_second.status_code == 200
+            era_id_second = upload_second.json()[0]["id"]
+            process_again = client.post(
+                f"/api/v1/revenue/era-pdfs/{era_id_second}/process",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert process_again.status_code == 200
+            generated_request_id = process_again.json()["request_id"]
+            assert generated_request_id
+            UUID(generated_request_id)
     finally:
         app.dependency_overrides.clear()
