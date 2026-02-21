@@ -68,6 +68,7 @@ from app.db.models.revenue_era import (  # noqa: F401
     RevenueEraFile,
     RevenueEraProcessingLog,
     RevenueEraStructuredResult,
+    RevenueEraValidationReport,
     RevenueEraWorkItem,
 )
 from app.db.models.rpt_kpi_daily import RptKpiDaily  # noqa: F401

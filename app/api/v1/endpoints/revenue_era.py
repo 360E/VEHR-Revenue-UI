@@ -17,6 +17,7 @@ from app.db.models.revenue_era import (
     RevenueEraExtractResult,
     RevenueEraFile,
     RevenueEraStructuredResult,
+    RevenueEraValidationReport,
     RevenueEraWorkItem,
 )
 from app.db.session import get_db
@@ -27,8 +28,20 @@ from app.services.revenue_era import (
     STATUS_STRUCTURED,
     STATUS_UPLOADED,
     WORKITEM_OPEN,
+    ERROR_CODE_DUPLICATE,
+    ERROR_CODE_PHI_DETECTED,
+    ERROR_CODE_PROCESSING_FAILED,
+    ERROR_CODE_RECONCILIATION_FAILED,
+    ERROR_CODE_SCHEMA_INVALID,
+    EraPhiDetectedError,
+    EraReconciliationError,
+    EraSchemaInvalidError,
+    fail_closed_enabled,
     log_attempt,
     normalize_structured,
+    phi_scan,
+    phase2_validation_enabled,
+    reconcile_era,
     record_processing_log,
     RevenueEraStructuredV1,
     run_doc_intel,
@@ -66,6 +79,42 @@ class WorkItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ValidationTotalsResponse(BaseModel):
+    paid: int
+    adjustment: int
+    patient_responsibility: int
+    net: int
+
+
+class EraValidateResponse(BaseModel):
+    era_file_id: str
+    reconciled: bool
+    declared_total_missing: bool
+    claim_count: int
+    line_count: int
+    work_item_count: int
+    totals_cents: ValidationTotalsResponse
+    top_work_items: list[WorkItemResponse]
+
+
+class EraReportResponse(BaseModel):
+    era_file_id: str
+    claim_count: int
+    line_count: int
+    work_item_count: int
+    total_paid_cents: int
+    total_adjustment_cents: int
+    total_patient_resp_cents: int
+    net_cents: int
+    reconciled: bool
+    declared_total_missing: bool
+    phi_scan_passed: bool
+    phi_hit_count: int
+    finalized: bool
+    created_at: datetime
+    top_work_items: list[WorkItemResponse]
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
@@ -98,6 +147,29 @@ def _latest_structured_result(db: Session, era_file_id: str) -> RevenueEraStruct
         )
         .scalars()
         .first()
+    )
+
+
+def _raise_phase2_error(http_status: int, *, error_code: str, era_file_id: str | None = None) -> None:
+    detail: dict[str, Any] = {"error_code": error_code}
+    if era_file_id:
+        detail["era_file_id"] = era_file_id
+    raise HTTPException(status_code=http_status, detail=detail)
+
+
+def _top_work_items(db: Session, *, organization_id: str, era_file_id: str, limit: int = 50) -> list[RevenueEraWorkItem]:
+    return (
+        db.execute(
+            select(RevenueEraWorkItem)
+            .where(
+                RevenueEraWorkItem.organization_id == organization_id,
+                RevenueEraWorkItem.era_file_id == era_file_id,
+            )
+            .order_by(RevenueEraWorkItem.dollars_cents.desc(), RevenueEraWorkItem.created_at.asc())
+            .limit(limit)
+        )
+        .scalars()
+        .all()
     )
 
 
@@ -175,6 +247,233 @@ async def upload_era_pdfs(
             ) from exc
 
     return created
+
+
+@router.post("/era/validate", response_model=EraValidateResponse)
+async def validate_era_pdf(
+    file: UploadFile = File(..., description="ERA PDF file", media_type="application/pdf"),
+    db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
+    membership: OrganizationMembership = Depends(get_current_membership),
+    _: None = Depends(require_permission("billing:write")),
+) -> EraValidateResponse:
+    strict_mode = phase2_validation_enabled()
+    fail_closed = fail_closed_enabled() if strict_mode else False
+    repo_root = _repo_root()
+    upload_dir = repo_root / "uploads" / "revenue_era" / organization.id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    file_id = str(uuid4())
+    safe_name = sanitize_filename(file.filename or "upload.pdf")
+    temp_path = upload_dir / f"{file_id}__{safe_name}.uploading"
+    final_rel = Path("uploads") / "revenue_era" / organization.id / f"{file_id}__{safe_name}"
+    final_path = repo_root / final_rel
+    era_file_id: str | None = None
+
+    try:
+        sha256, _ = await write_pdf_with_sha(file, temp_path)
+
+        duplicate = db.execute(
+            select(RevenueEraFile).where(
+                RevenueEraFile.organization_id == organization.id,
+                RevenueEraFile.sha256 == sha256,
+            )
+        ).scalar_one_or_none()
+        if duplicate:
+            _raise_phase2_error(
+                status.HTTP_409_CONFLICT,
+                error_code=ERROR_CODE_DUPLICATE,
+                era_file_id=duplicate.id,
+            )
+        os.replace(temp_path, final_path)
+        era_file = RevenueEraFile(
+            id=file_id,
+            organization_id=organization.id,
+            file_name=safe_name,
+            sha256=sha256,
+            payer_name_raw=None,
+            received_date=None,
+            storage_ref=final_rel.as_posix(),
+            status=STATUS_UPLOADED,
+            error_detail=None,
+        )
+        db.add(era_file)
+        db.flush()
+        era_file_id = era_file.id
+        record_processing_log(
+            db,
+            era_file_id=era_file.id,
+            stage="UPLOAD",
+            message=f"file_name={safe_name}",
+            commit=False,
+        )
+
+        try:
+            di_result = run_doc_intel(final_path)
+            extracted_payload = di_result.get("extracted") or {}
+            extract_row = RevenueEraExtractResult(
+                id=str(uuid4()),
+                era_file_id=era_file.id,
+                extractor="azure_doc_intelligence",
+                model_id=str(di_result.get("model_id", "")),
+                extracted_json=extracted_payload,
+            )
+            db.add(extract_row)
+            era_file.status = STATUS_EXTRACTED
+            db.add(era_file)
+            record_processing_log(
+                db,
+                era_file_id=era_file.id,
+                stage="EXTRACTED",
+                message=f"extractor={extract_row.extractor}; model_id={extract_row.model_id}",
+                commit=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"extract_failed: {exc}") from exc
+
+        try:
+            structured = run_structuring_llm(extract_row.extracted_json)
+            structured_row = RevenueEraStructuredResult(
+                id=str(uuid4()),
+                era_file_id=era_file.id,
+                llm="azure_openai",
+                deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT", "").strip(),
+                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "").strip(),
+                prompt_version="era_structured_v1",
+                structured_json=structured.model_dump(mode="json"),
+            )
+            db.add(structured_row)
+            era_file.status = STATUS_STRUCTURED
+            db.add(era_file)
+            record_processing_log(
+                db,
+                era_file_id=era_file.id,
+                stage="STRUCTURED",
+                message=f"claim_count={len(structured.claim_lines)}",
+                commit=False,
+            )
+        except ValidationError as exc:
+            raise EraSchemaInvalidError(summarize_validation_error(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise EraSchemaInvalidError(str(exc)) from exc
+
+        schema_valid = True
+        phi_scan_passed, phi_hits = phi_scan(structured.model_dump(mode="json"))
+        if not phi_scan_passed:
+            raise EraPhiDetectedError("phi_detected")
+
+        try:
+            claim_count, work_count, _ = normalize_structured(db, era_file=era_file, structured=structured)
+        except ValidationError as exc:
+            raise EraSchemaInvalidError(summarize_validation_error(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"normalization_failed: {exc}") from exc
+
+        recon = reconcile_era(structured)
+        if not recon["reconciled"] and not recon["declared_total_missing"]:
+            raise EraReconciliationError("declared_totals_mismatch")
+
+        finalized = phi_scan_passed and schema_valid and (
+            recon["reconciled"] or recon["declared_total_missing"]
+        )
+        report = RevenueEraValidationReport(
+            id=str(uuid4()),
+            org_id=organization.id,
+            era_file_id=era_file.id,
+            claim_count=claim_count,
+            line_count=recon["line_count"],
+            work_item_count=work_count,
+            total_paid_cents=recon["total_paid_cents"],
+            total_adjustment_cents=recon["total_adjustment_cents"],
+            total_patient_resp_cents=recon["total_patient_resp_cents"],
+            net_cents=recon["net_cents"],
+            reconciled=recon["reconciled"],
+            declared_total_missing=recon["declared_total_missing"],
+            phi_scan_passed=phi_scan_passed,
+            phi_hit_count=len(phi_hits),
+            finalized=finalized,
+        )
+        db.add(report)
+        era_file.status = STATUS_NORMALIZED
+        if not era_file.payer_name_raw:
+            era_file.payer_name_raw = structured.payer_name
+        if not era_file.received_date and structured.received_date:
+            era_file.received_date = structured.received_date
+        db.add(era_file)
+        record_processing_log(
+            db,
+            era_file_id=era_file.id,
+            stage="NORMALIZED",
+            message=(
+                f"claim_count={claim_count}; work_item_count={work_count}; "
+                f"reconciled={recon['reconciled']}; declared_total_missing={recon['declared_total_missing']}"
+            ),
+            commit=False,
+        )
+        db.commit()
+
+        top_work_items = _top_work_items(db, organization_id=organization.id, era_file_id=file_id)
+        return EraValidateResponse(
+            era_file_id=file_id,
+            reconciled=report.reconciled,
+            declared_total_missing=report.declared_total_missing,
+            claim_count=report.claim_count,
+            line_count=report.line_count,
+            work_item_count=report.work_item_count,
+            totals_cents=ValidationTotalsResponse(
+                paid=report.total_paid_cents,
+                adjustment=report.total_adjustment_cents,
+                patient_responsibility=report.total_patient_resp_cents,
+                net=report.net_cents,
+            ),
+            top_work_items=top_work_items,
+        )
+    except HTTPException:
+        if fail_closed:
+            db.rollback()
+        raise
+    except EraSchemaInvalidError:
+        if fail_closed:
+            db.rollback()
+        _raise_phase2_error(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            error_code=ERROR_CODE_SCHEMA_INVALID,
+            era_file_id=era_file_id,
+        )
+    except EraPhiDetectedError:
+        if fail_closed:
+            db.rollback()
+        _raise_phase2_error(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            error_code=ERROR_CODE_PHI_DETECTED,
+            era_file_id=era_file_id,
+        )
+    except EraReconciliationError:
+        if fail_closed:
+            db.rollback()
+        _raise_phase2_error(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            error_code=ERROR_CODE_RECONCILIATION_FAILED,
+            era_file_id=era_file_id,
+        )
+    except Exception:  # noqa: BLE001
+        if fail_closed:
+            db.rollback()
+        _raise_phase2_error(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_code=ERROR_CODE_PROCESSING_FAILED,
+            era_file_id=era_file_id,
+        )
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        if fail_closed and era_file_id and not db.get(RevenueEraFile, era_file_id):
+            try:
+                final_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 @router.get("/revenue/era-pdfs", response_model=list[EraFileResponse])
@@ -401,7 +700,7 @@ def get_era_worklist(
                 RevenueEraWorkItem.organization_id == organization.id,
                 RevenueEraWorkItem.status == WORKITEM_OPEN,
             )
-            .order_by(RevenueEraWorkItem.dollars_cents.desc())
+            .order_by(RevenueEraWorkItem.dollars_cents.desc(), RevenueEraWorkItem.created_at.asc())
         )
         .scalars()
         .all()
@@ -414,3 +713,51 @@ def get_era_worklist(
         action="era_worklist_view",
     )
     return rows
+
+
+@router.get("/era/{era_file_id}/report", response_model=EraReportResponse)
+def get_era_validation_report(
+    era_file_id: str,
+    db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
+    membership: OrganizationMembership = Depends(get_current_membership),
+    _: None = Depends(require_permission("billing:read")),
+) -> EraReportResponse:
+    _era_file_or_404(db, era_file_id=era_file_id, organization_id=organization.id)
+    report = (
+        db.execute(
+            select(RevenueEraValidationReport).where(
+                RevenueEraValidationReport.org_id == organization.id,
+                RevenueEraValidationReport.era_file_id == era_file_id,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if not report:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="era_report_not_found")
+    top_work_items = _top_work_items(db, organization_id=organization.id, era_file_id=era_file_id)
+    log_attempt(
+        db,
+        organization_id=organization.id,
+        actor=membership.user.email,
+        era_file_id=era_file_id,
+        action="era_validation_report_view",
+    )
+    return EraReportResponse(
+        era_file_id=report.era_file_id,
+        claim_count=report.claim_count,
+        line_count=report.line_count,
+        work_item_count=report.work_item_count,
+        total_paid_cents=report.total_paid_cents,
+        total_adjustment_cents=report.total_adjustment_cents,
+        total_patient_resp_cents=report.total_patient_resp_cents,
+        net_cents=report.net_cents,
+        reconciled=report.reconciled,
+        declared_total_missing=report.declared_total_missing,
+        phi_scan_passed=report.phi_scan_passed,
+        phi_hit_count=report.phi_hit_count,
+        finalized=report.finalized,
+        created_at=report.created_at,
+        top_work_items=top_work_items,
+    )
