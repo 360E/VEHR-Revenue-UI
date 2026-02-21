@@ -28,3 +28,12 @@ era-validate:
 
 local-smoke:
 	python scripts/local_smoke.py --file "$(FILE)"
+
+era-login:
+	python scripts/era_ops.py login --base-url "$(BASE_URL)" --email "$(EMAIL)" --password "$(PASSWORD)"
+
+era-ingest:
+	python scripts/era_ops.py ingest --dir "$(DIR)" --base-url "$(BASE_URL)" --email "$(EMAIL)" --password "$(PASSWORD)"
+
+era-watch:
+	python scripts/era_ops.py ingest --dir "$(DIR)" --watch --poll-seconds "$(POLL_SECONDS)" --base-url "$(BASE_URL)" --email "$(EMAIL)" --password "$(PASSWORD)"
