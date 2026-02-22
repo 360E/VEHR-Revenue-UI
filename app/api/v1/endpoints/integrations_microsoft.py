@@ -311,12 +311,14 @@ def microsoft_refresh_connection(
     membership: OrganizationMembership = Depends(get_current_membership),
     _: None = Depends(require_permission("org:manage")),
 ) -> MicrosoftRefreshResponse:
+    organization_id = membership.organization_id
+    user_id = membership.user_id
     log_event(
         db,
         action="microsoft.refresh_connection_attempt",
         entity_type="integration",
-        entity_id=membership.organization_id,
-        organization_id=membership.organization_id,
+        entity_id=organization_id,
+        organization_id=organization_id,
         actor=membership.user.email,
         metadata={"provider": "microsoft"},
     )
@@ -324,16 +326,16 @@ def microsoft_refresh_connection(
     try:
         expires_at = refresh_microsoft_connection_tokens(
             db=db,
-            organization_id=membership.organization_id,
-            user_id=membership.user_id,
+            organization_id=organization_id,
+            user_id=user_id,
         )
     except MicrosoftGraphServiceError as exc:
         log_event(
             db,
             action="microsoft.refresh_connection_failed",
             entity_type="integration",
-            entity_id=membership.organization_id,
-            organization_id=membership.organization_id,
+            entity_id=organization_id,
+            organization_id=organization_id,
             actor=membership.user.email,
             metadata={"provider": "microsoft", "error": exc.detail},
         )
@@ -343,8 +345,8 @@ def microsoft_refresh_connection(
         db,
         action="microsoft.refresh_connection",
         entity_type="integration",
-        entity_id=membership.organization_id,
-        organization_id=membership.organization_id,
+        entity_id=organization_id,
+        organization_id=organization_id,
         actor=membership.user.email,
         metadata={"provider": "microsoft"},
     )
@@ -618,11 +620,13 @@ def microsoft_callback(
 
     try:
         decoded_state = _decode_state(state)
+        organization_id = decoded_state["org_id"]
+        user_id = decoded_state["user_id"]
         settings = _microsoft_oauth_settings()
         membership = _ensure_membership_for_state(
             db=db,
-            organization_id=decoded_state["org_id"],
-            user_id=decoded_state["user_id"],
+            organization_id=organization_id,
+            user_id=user_id,
         )
         token_response = _exchange_code_for_tokens(code=code, settings=settings)
 
@@ -642,8 +646,8 @@ def microsoft_callback(
         access_token_enc = encrypt_token(access_token) if access_token else None
         account = _upsert_integration_account(
             db=db,
-            organization_id=decoded_state["org_id"],
-            user_id=decoded_state["user_id"],
+            organization_id=organization_id,
+            user_id=user_id,
             external_tenant_id=external_tenant_id,
             external_user_id=external_user_id,
             email=email,
@@ -656,11 +660,11 @@ def microsoft_callback(
             action="microsoft.connected",
             entity_type="integration_account",
             entity_id=account.id,
-            organization_id=decoded_state["org_id"],
+            organization_id=organization_id,
             actor=membership.user.email,
             metadata={
                 "provider": "microsoft",
-                "user_id": decoded_state["user_id"],
+                "user_id": user_id,
                 "external_tenant_id": external_tenant_id,
                 "external_user_id": external_user_id,
             },
@@ -679,8 +683,8 @@ def microsoft_callback(
             )
             _upsert_user_microsoft_connection(
                 db=db,
-                organization_id=decoded_state["org_id"],
-                user_id=decoded_state["user_id"],
+                organization_id=organization_id,
+                user_id=user_id,
                 tenant_id=external_tenant_id,
                 msft_user_id=external_user_id,
                 scopes=scopes_list,

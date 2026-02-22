@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import json
+import re
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
 from urllib.parse import urlparse
@@ -105,11 +107,24 @@ def get_cors_origins() -> list[str]:
         return default_origins
 
     configured: list[str] = []
-    for token in raw.split(","):
-        origin = token.strip().rstrip("/")
-        if not origin:
-            continue
-        if origin == "*":
+    candidate_tokens: list[str] = []
+
+    parsed_json: object | None = None
+    try:
+        parsed_json = json.loads(raw)
+    except Exception:
+        parsed_json = None
+
+    if isinstance(parsed_json, list):
+        for item in parsed_json:
+            if isinstance(item, str):
+                candidate_tokens.append(item)
+    else:
+        candidate_tokens.extend(token for token in re.split(r"[\s,;]+", raw) if token)
+
+    for token in candidate_tokens:
+        origin = token.strip().strip('"\'').rstrip("/")
+        if not origin or origin == "*":
             continue
         configured.append(origin)
 

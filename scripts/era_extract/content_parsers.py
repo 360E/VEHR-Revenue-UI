@@ -26,6 +26,16 @@ _MONEY_RX = re.compile(r"\(?\$\s*(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{1
 _CLAIM_BLOCK_ANCHOR_RX = re.compile(r"(?i)\b(Patient\s+Name|NAME)\s*:\s*")
 
 
+def _is_currency_like_token(raw: str) -> bool:
+    token = (raw or "").strip()
+    if not token:
+        return False
+    if "$" in token:
+        return True
+    normalized = token.replace("(", "").replace(")", "").replace(",", "").strip()
+    return "." in normalized
+
+
 def _clean_lines(text: str) -> list[str]:
     return [line.strip() for line in (text or "").splitlines() if line and line.strip()]
 
@@ -852,9 +862,7 @@ def parse_era_content(
         counters["distinct_patient_name_count_after"] = 0
     else:
         counters["patient_name_global_suppressed"] = 0
-        counters["distinct_patient_name_count_after"] = len(
-            {row.get("patient_name") for row in rows if row.get("patient_name")}
-        )
+        counters["distinct_patient_name_count_after"] = len({row.get("patient_name") for row in rows if row.get("patient_name")})
 
     if counters["distinct_claim_id_count"] > 1 and counters["distinct_member_id_count_before"] == 1:
         for row in rows:
@@ -866,11 +874,7 @@ def parse_era_content(
         counters["distinct_member_id_count_after"] = len({row.get("member_id") for row in rows if row.get("member_id")})
 
     # Final hard filter: service lines only (this drives deterministic counts)
-    rows = [
-        row
-        for row in rows
-        if row.get("dos_from") is not None and row.get("proc_code") and row.get("billed_amount") is not None
-    ]
+    rows = [row for row in rows if row.get("dos_from") is not None and row.get("proc_code") and row.get("billed_amount") is not None]
 
     counters["line_rows_extracted"] = len(rows)
     counters["total_line_rows"] = len(rows)

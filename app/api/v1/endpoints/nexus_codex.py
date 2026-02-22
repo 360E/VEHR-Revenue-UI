@@ -120,7 +120,7 @@ def _dispatch_workflow(*, token: str, issue_number: int, risk: str) -> None:
         )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=500, detail="GitHub workflow dispatch request failed") from exc
-    if response.status_code != 204:
+    if response.status_code not in {200, 201, 204}:
         raise HTTPException(
             status_code=500,
             detail=f"GitHub workflow dispatch failed with status {response.status_code}",
