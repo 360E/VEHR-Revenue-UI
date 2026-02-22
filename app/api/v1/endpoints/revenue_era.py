@@ -890,7 +890,6 @@ def process_era_pdf(
         commit=False,
     )
     db.commit()
-    structuring_duration_ms = int((time.perf_counter() - structuring_started_at) * 1000)
     era_file = _locked_era_file()
     _set_status(era_file, STATUS_PROCESSING_STRUCTURING)
     era_file.current_stage = "structuring"
@@ -915,6 +914,7 @@ def process_era_pdf(
         _log_process_failure("openai_structuring", error_code, duration_ms=duration_ms)
         return _external_service_failure("openai_structuring", error_code)
 
+    structuring_duration_ms = int((time.perf_counter() - structuring_started_at) * 1000)
     era_file = _locked_era_file()
     if era_file.status != STATUS_PROCESSING_STRUCTURING:
         db.rollback()

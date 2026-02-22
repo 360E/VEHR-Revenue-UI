@@ -16,9 +16,11 @@ def test_extract_stage_durations_reads_duration_only() -> None:
         {"stage": "EXTRACTED", "message": "model_id=di; duration_ms=101"},
         {"stage": "STRUCTURED", "message": "claim_count=1; duration_ms=202"},
         {"stage": "NORMALIZED", "message": "claim_count=1"},
-        {"stage": "STRUCTURED", "message": "duration_ms=abc"},
+        {"stage": "FAILED", "message": "duration_ms=abc"},
     ]
-    assert load_test._extract_stage_durations(rows) == {"extracted": 101, "structured": 202}
+    parsed = load_test._extract_stage_durations(rows)
+    assert parsed == {"extracted": 101, "structured": 202}
+    assert "failed" not in parsed
 
 
 def test_required_stress_fixtures_exist() -> None:
@@ -32,6 +34,12 @@ def test_required_stress_fixtures_exist() -> None:
         "encrypted.pdf",
     }
     assert required.issubset({path.name for path in fixture_dir.iterdir() if path.is_file()})
+
+
+def test_main_rejects_invalid_base_url(tmp_path) -> None:
+    pdf = tmp_path / "sample.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    assert load_test.main(["--dir", str(tmp_path), "--base-url", "ftp://invalid"]) == 1
 
 
 def test_main_supports_concurrency_matrix(tmp_path, monkeypatch, capsys) -> None:

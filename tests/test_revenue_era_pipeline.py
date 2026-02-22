@@ -1750,7 +1750,7 @@ def test_process_logs_duration_ms_per_stage(tmp_path, monkeypatch) -> None:
                 .scalars()
                 .all()
             )
-            for stage in {"EXTRACTED", "STRUCTURED", "NORMALIZED"}:
+            for stage in ("EXTRACTED", "STRUCTURED", "NORMALIZED"):
                 stage_logs = [log for log in logs if log.stage == stage]
                 assert stage_logs
                 assert any("duration_ms=" in log.message for log in stage_logs)

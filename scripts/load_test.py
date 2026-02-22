@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import platform
 import resource
 import statistics
 import sys
@@ -13,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from time import perf_counter
 from urllib import error, request
+from urllib.parse import urlparse
 
 
 def _percentile(values: list[int], pct: int) -> int:
@@ -29,7 +31,10 @@ def _percentile(values: list[int], pct: int) -> int:
 
 
 def _rss_mb() -> float:
-    return float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) / 1024.0
+    value = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    if platform.system() == "Darwin":
+        return value / (1024.0 * 1024.0)
+    return value / 1024.0
 
 
 def _json_request(method: str, url: str, *, token: str | None = None, body: bytes | None = None, content_type: str | None = None):
@@ -179,8 +184,16 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _valid_base_url(base_url: str) -> bool:
+    parsed = urlparse(base_url.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    if not _valid_base_url(args.base_url):
+        print("error=invalid_base_url", file=sys.stderr)
+        return 1
     pdf_dir = Path(args.dir).expanduser().resolve()
     if not pdf_dir.exists() or not pdf_dir.is_dir():
         print(f"error=invalid_dir path={pdf_dir}", file=sys.stderr)
@@ -210,8 +223,8 @@ def main(argv: list[str] | None = None) -> int:
         for future in as_completed(futures):
             try:
                 outcome = future.result()
-            except Exception:  # noqa: BLE001
-                print("failed error_code=load_runner_failure request_id=-", file=sys.stderr)
+            except Exception as exc:
+                print(f"failed error_code=load_runner_{type(exc).__name__} request_id=-", file=sys.stderr)
                 return 1
             with lock:
                 total_durations.append(outcome["duration_ms"])
