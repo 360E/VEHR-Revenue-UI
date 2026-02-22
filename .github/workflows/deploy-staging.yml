@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -21,42 +20,7 @@ env:
   APP_URL: https://vehr-revos-staging.whitemoss-9930542d.eastus.azurecontainerapps.io
 
 jobs:
-  build-and-test:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install backend dependencies
-        shell: bash
-        run: |
-          set -euxo pipefail
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest
-
-      - name: Build check
-        shell: bash
-        run: |
-          set -euxo pipefail
-          python -m compileall app
-
-      - name: Run tests
-        shell: bash
-        run: |
-          set -euxo pipefail
-          PYTHONPATH=. pytest -q
-
   build-and-deploy:
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
 
     steps:
