@@ -189,6 +189,21 @@ Run Revenue OS Standalone
     - make test
     - make test-pg
 
+Stress & Concurrency Validation
+
+- Fixture set lives in `tests/fixtures/era/`:
+  - `large_20p.pdf`, `large_50p.pdf`, `large_100p.pdf`
+  - `malformed_truncated.pdf`, `malformed_not_pdf.pdf`, `encrypted.pdf`
+- Run repeatable load harness:
+  - `DATABASE_URL=... python scripts/load_test.py --dir /absolute/path/to/tests/fixtures/era --base-url http://127.0.0.1:8000 --email admin@example.com --password ChangeMeNow! --mode processes --workers 5 --iterations 1 --memory-ceiling-mb 1024`
+  - Re-run with `--workers 20` and `--workers 50` for concurrency matrix.
+- Harness output includes:
+  - success/failure rate, failure rate by `error_code`
+  - p50/p95/p99 latency and per-stage `duration_ms` percentiles
+  - max RSS memory observed across worker processes and memory-ceiling gate
+  - DB invariant pass/fail, failing invariant names/counts, determinism failure tracking
+  - failed runs print `request_id` only (no PHI, no raw exceptions)
+
 Installable local app (PWA)
 
 - Open `http://localhost:3000` in Chrome or Edge.

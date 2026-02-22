@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import pytest
 
 
 os.environ.setdefault("INTEGRATION_TOKEN_KEY", "integration-token-key-for-tests")
@@ -13,3 +14,11 @@ os.environ.setdefault(
 )
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/testdb")
+
+
+@pytest.fixture
+def auth_headers():
+    def _build(token: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token}"}
+
+    return _build
