@@ -168,16 +168,19 @@ def create_app(*, enable_startup_validation: bool = True, include_router: bool =
             logger.info("Skipping startup validation (%s)", ", ".join(skip_reasons))
         else:
             if enable_startup_validation and include_router:
-                from app.services.ringcentral_realtime import (
-                    RingCentralRealtimeError,
-                    validate_ringcentral_startup_configuration,
-                )
+                if truthy_env("RINGCENTRAL_REALTIME_ENABLED"):
+                    from app.services.ringcentral_realtime import (
+                        RingCentralRealtimeError,
+                        validate_ringcentral_startup_configuration,
+                    )
 
-                try:
-                    validate_ringcentral_startup_configuration()
-                except RingCentralRealtimeError as exc:
-                    logger.exception("RingCentral startup validation failed")
-                    raise RuntimeError(exc.detail) from exc
+                    try:
+                        validate_ringcentral_startup_configuration()
+                    except RingCentralRealtimeError as exc:
+                        logger.exception("RingCentral startup validation failed")
+                        raise RuntimeError(exc.detail) from exc
+                else:
+                    logger.info("ringcentral_realtime_disabled")
 
             if enable_startup_validation and truthy_env("TANNER_AI_ENABLED"):
                 if not os.getenv("OPENAI_API_KEY", "").strip():
