@@ -849,6 +849,7 @@ def process_era_pdf(
         _log_process_failure("document_intelligence_extract", error_code, duration_ms=duration_ms)
         return _external_service_failure("document_intelligence_extract", error_code)
 
+    extract_duration_ms = int((time.perf_counter() - extract_started_at) * 1000)
     extracted_payload = di_result.get("extracted") or {}
     page_count = 0
     if isinstance(extracted_payload, dict):
@@ -884,11 +885,12 @@ def process_era_pdf(
         stage="EXTRACTED",
         message=(
             f"extractor={extract_row.extractor}; model_id={extract_row.model_id}; page_count={page_count}; "
-            f"request_id={di_result.get('request_id') or ''}"
+            f"request_id={di_result.get('request_id') or ''}; duration_ms={extract_duration_ms}"
         ),
         commit=False,
     )
     db.commit()
+    structuring_duration_ms = int((time.perf_counter() - structuring_started_at) * 1000)
     era_file = _locked_era_file()
     _set_status(era_file, STATUS_PROCESSING_STRUCTURING)
     era_file.current_stage = "structuring"
@@ -943,7 +945,7 @@ def process_era_pdf(
         message=(
             f"llm={structured_row.llm}; deployment={structured_row.deployment}; "
             f"api_version={structured_row.api_version}; prompt_version={structured_row.prompt_version}; "
-            f"claim_count={len(structured.claim_lines)}"
+            f"claim_count={len(structured.claim_lines)}; duration_ms={structuring_duration_ms}"
         ),
         commit=False,
     )
@@ -951,9 +953,11 @@ def process_era_pdf(
     if not structured:
         _fail("structuring", "structured_missing", status.HTTP_500_INTERNAL_SERVER_ERROR, "structuring_failed")
 
+    normalize_started_at = time.perf_counter()
     try:
         with db.begin_nested():
             claim_count, work_count, dollars_total = normalize_structured(db, era_file=era_file, structured=structured)
+            normalize_duration_ms = int((time.perf_counter() - normalize_started_at) * 1000)
             era_file.stage_completed_at = utc_now()
             _set_status(era_file, STATUS_COMPLETE)
             era_file.current_stage = "complete"
@@ -967,7 +971,8 @@ def process_era_pdf(
                 era_file_id=era_file.id,
                 stage="NORMALIZED",
                 message=(
-                    f"claim_count={claim_count}; work_item_count={work_count}; dollars_cents_total={dollars_total}"
+                    f"claim_count={claim_count}; work_item_count={work_count}; dollars_cents_total={dollars_total}; "
+                    f"duration_ms={normalize_duration_ms}"
                 ),
                 commit=False,
             )

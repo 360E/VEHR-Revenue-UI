@@ -1713,6 +1713,51 @@ def test_worklist_sorting_is_deterministic_with_tiebreaker(tmp_path, monkeypatch
         app.dependency_overrides.clear()
 
 
+def test_process_logs_duration_ms_per_stage(tmp_path, monkeypatch) -> None:
+    session_factory = _setup_sqlite(tmp_path)
+    token, _ = _seed_admin(session_factory)
+    monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
+
+    monkeypatch.setattr(revenue_era, "run_doc_intel", lambda path: {"model_id": "di-model", "extracted": {"ok": True}})
+    monkeypatch.setattr(
+        revenue_era,
+        "run_structuring_llm",
+        lambda payload: RevenueEraStructuredV1(
+            payer_name="Payer One",
+            claim_lines=[RevenueEraStructuredLine(claim_ref="CLM123", match_status=MATCH_UNMATCHED)],
+        ),
+    )
+
+    try:
+        with TestClient(app) as client:
+            upload = client.post(
+                "/api/v1/revenue/era-pdfs/upload",
+                files=[("files", ("era.pdf", b"%PDF-1.4 era", "application/pdf"))],
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert upload.status_code == 200
+            era_id = upload.json()[0]["id"]
+
+            process = client.post(
+                f"/api/v1/revenue/era-pdfs/{era_id}/process",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert process.status_code == 200
+
+        with session_factory() as db:
+            logs = (
+                db.execute(select(RevenueEraProcessingLog).where(RevenueEraProcessingLog.era_file_id == era_id))
+                .scalars()
+                .all()
+            )
+            for stage in {"EXTRACTED", "STRUCTURED", "NORMALIZED"}:
+                stage_logs = [log for log in logs if log.stage == stage]
+                assert stage_logs
+                assert any("duration_ms=" in log.message for log in stage_logs)
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_process_response_includes_request_id(tmp_path, monkeypatch) -> None:
     session_factory = _setup_sqlite(tmp_path)
     token, _ = _seed_admin(session_factory)
