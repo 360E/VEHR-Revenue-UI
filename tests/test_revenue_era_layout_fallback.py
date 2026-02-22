@@ -66,16 +66,28 @@ def test_doc_intel_falls_back_to_prebuilt_layout_and_structuring_receives_layout
     azure_core_module.__path__ = []  # type: ignore[attr-defined]
     azure_core_credentials_module = types.ModuleType("azure.core.credentials")
     azure_core_credentials_module.AzureKeyCredential = FakeCredential
+    azure_core_pipeline_module = types.ModuleType("azure.core.pipeline")
+    azure_core_pipeline_module.__path__ = []  # type: ignore[attr-defined]
+    azure_core_pipeline_policies_module = types.ModuleType("azure.core.pipeline.policies")
+    azure_core_pipeline_transport_module = types.ModuleType("azure.core.pipeline.transport")
+    azure_core_pipeline_policies_module.RetryPolicy = lambda **kwargs: kwargs
+    azure_core_pipeline_transport_module.RequestsTransport = lambda **kwargs: kwargs
     azure_module.ai = azure_ai_module  # type: ignore[attr-defined]
     azure_ai_module.documentintelligence = azure_docintel_module  # type: ignore[attr-defined]
     azure_module.core = azure_core_module  # type: ignore[attr-defined]
     azure_core_module.credentials = azure_core_credentials_module  # type: ignore[attr-defined]
+    azure_core_module.pipeline = azure_core_pipeline_module  # type: ignore[attr-defined]
+    azure_core_pipeline_module.policies = azure_core_pipeline_policies_module  # type: ignore[attr-defined]
+    azure_core_pipeline_module.transport = azure_core_pipeline_transport_module  # type: ignore[attr-defined]
 
     monkeypatch.setitem(sys.modules, "azure", azure_module)
     monkeypatch.setitem(sys.modules, "azure.ai", azure_ai_module)
     monkeypatch.setitem(sys.modules, "azure.ai.documentintelligence", azure_docintel_module)
     monkeypatch.setitem(sys.modules, "azure.core", azure_core_module)
     monkeypatch.setitem(sys.modules, "azure.core.credentials", azure_core_credentials_module)
+    monkeypatch.setitem(sys.modules, "azure.core.pipeline", azure_core_pipeline_module)
+    monkeypatch.setitem(sys.modules, "azure.core.pipeline.policies", azure_core_pipeline_policies_module)
+    monkeypatch.setitem(sys.modules, "azure.core.pipeline.transport", azure_core_pipeline_transport_module)
 
     monkeypatch.setenv("AZURE_DOCINTEL_ENDPOINT", "https://example.cognitiveservices.azure.com")
     monkeypatch.setenv("AZURE_DOCINTEL_KEY", "secret")

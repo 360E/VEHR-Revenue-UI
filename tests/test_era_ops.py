@@ -119,7 +119,12 @@ def test_main_ingest_reports_process_error(tmp_path: Path, monkeypatch, capsys) 
         if req.full_url.endswith("/api/v1/revenue/era-pdfs/era-1/process"):
             return _Response(
                 502,
-                {"error": "external_service_failure", "stage": "extract", "error_code": "DI_TIMEOUT", "request_id": "req-1"},
+                {
+                    "error": "upstream_failure",
+                    "stage": "document_intelligence_extract",
+                    "error_code": "azure_timeout",
+                    "request_id": "req-1",
+                },
             )
         raise AssertionError(f"unexpected url {req.full_url}")
 
@@ -132,4 +137,4 @@ def test_main_ingest_reports_process_error(tmp_path: Path, monkeypatch, capsys) 
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "summary success=0 failure=1" in captured.out
-    assert "stage=extract status=502 error_code=DI_TIMEOUT request_id=req-1" in captured.err
+    assert "stage=document_intelligence_extract status=502 error_code=azure_timeout request_id=req-1" in captured.err

@@ -27,6 +27,7 @@ from app.db.models.revenue_era import (
 from app.core.env import env_default_bool
 from app.services.audit import log_event
 from app.services.storage import sanitize_filename
+from infrastructure.azure_client import AzureClientError, AzureReliabilityClient
 
 
 STATUS_UPLOADED = "UPLOADED"
@@ -363,7 +364,24 @@ def _to_layout_envelope(payload: dict[str, Any]) -> dict[str, Any]:
     return {"pages": normalized_pages}
 
 
-def run_doc_intel(pdf_path: Path) -> dict[str, Any]:
+def _validate_layout_envelope(envelope: dict[str, Any]) -> bool:
+    pages = envelope.get("pages")
+    if not isinstance(pages, list):
+        return False
+    for page in pages:
+        if not isinstance(page, dict):
+            return False
+        if not isinstance(page.get("page_number"), int):
+            return False
+        if not isinstance(page.get("lines"), list):
+            return False
+        if not isinstance(page.get("tables"), list):
+            return False
+    return True
+
+
+def run_doc_intel(pdf_path: Path, *, request_id: str | None = None) -> dict[str, Any]:
+    request_id = request_id or str(uuid4())
     from azure.ai.documentintelligence import DocumentIntelligenceClient
     from azure.core.credentials import AzureKeyCredential
     from azure.core.pipeline.policies import RetryPolicy
@@ -375,8 +393,8 @@ def run_doc_intel(pdf_path: Path) -> dict[str, Any]:
     model_id = custom_model_id or "prebuilt-layout"
     connect_timeout_seconds = float(os.getenv("AZURE_DOCINTEL_CONNECT_TIMEOUT_SECONDS", "5"))
     read_timeout_seconds = float(os.getenv("AZURE_DOCINTEL_READ_TIMEOUT_SECONDS", "20"))
-    total_timeout_seconds = float(os.getenv("AZURE_DOCINTEL_TOTAL_TIMEOUT_SECONDS", "30"))
-    max_retries = int(os.getenv("AZURE_DOCINTEL_MAX_RETRIES", "2"))
+    # Phase 2 reliability requirement: Document Intelligence timeout must not exceed 30s.
+    total_timeout_seconds = min(float(os.getenv("AZURE_DOCINTEL_TOTAL_TIMEOUT_SECONDS", "30")), 30.0)
 
     if not endpoint or not key:
         raise RuntimeError("Azure Document Intelligence is not configured")
@@ -389,24 +407,48 @@ def run_doc_intel(pdf_path: Path) -> dict[str, Any]:
             read_timeout=read_timeout_seconds,
         ),
         retry_policy=RetryPolicy(
-            retry_total=max_retries,
-            retry_connect=max_retries,
-            retry_read=max_retries,
-            retry_status=max_retries,
+            retry_total=0,
+            retry_connect=0,
+            retry_read=0,
+            retry_status=0,
             retry_backoff_factor=0.8,
             retry_backoff_max=4,
         ),
     )
-    with pdf_path.open("rb") as data:
-        poller = client.begin_analyze_document(model_id=model_id, body=data, content_type="application/pdf")
-    result = poller.result(timeout=total_timeout_seconds)
-    request_id = None
+    azure_client = AzureReliabilityClient()
+
+    def _operation():
+        with pdf_path.open("rb") as data:
+            poller = client.begin_analyze_document(model_id=model_id, body=data, content_type="application/pdf")
+        return poller.result(timeout=total_timeout_seconds)
+
+    call = azure_client.call(
+        stage="document_intelligence_extract",
+        request_id=request_id,
+        timeout_seconds=total_timeout_seconds,
+        operation=_operation,
+    )
+    if not call.ok or call.value is None:
+        raise AzureClientError(
+            stage="document_intelligence_extract",
+            error_code=call.error_code or "azure_unavailable",
+            request_id=request_id,
+        )
+    result = call.value
+    upstream_request_id = None
     response = getattr(result, "_response", None)
     headers = getattr(response, "headers", None)
     if headers:
-        request_id = headers.get("x-ms-request-id") or headers.get("x-request-id")
+        upstream_request_id = headers.get("x-ms-request-id") or headers.get("x-request-id")
     payload = result.to_dict() if hasattr(result, "to_dict") else json.loads(json.dumps(result, default=str))
-    return {"model_id": model_id, "request_id": request_id, "extracted": _remove_phi(_to_layout_envelope(payload))}
+    envelope = _remove_phi(_to_layout_envelope(payload))
+    if not _validate_layout_envelope(envelope):
+        raise AzureClientError(
+            stage="document_intelligence_extract",
+            error_code="azure_invalid_response",
+            request_id=request_id,
+        )
+    return {"model_id": model_id, "request_id": upstream_request_id or request_id, "extracted": envelope}
 
 
 def _structured_schema() -> dict[str, Any]:
@@ -415,7 +457,8 @@ def _structured_schema() -> dict[str, Any]:
     return schema
 
 
-def run_structuring_llm(extracted_json: dict[str, Any]) -> RevenueEraStructuredV1:
+def run_structuring_llm(extracted_json: dict[str, Any], *, request_id: str | None = None) -> RevenueEraStructuredV1:
+    request_id = request_id or str(uuid4())
     deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "").strip()
     api_version = os.getenv("AZURE_OPENAI_API_VERSION", "").strip()
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
@@ -423,61 +466,83 @@ def run_structuring_llm(extracted_json: dict[str, Any]) -> RevenueEraStructuredV
     if not (deployment and api_version and endpoint and api_key):
         raise RuntimeError("Azure OpenAI is not configured")
 
-    timeout_seconds = float(os.getenv("AZURE_OPENAI_TIMEOUT_SECONDS", "30"))
-    max_retries = int(os.getenv("AZURE_OPENAI_MAX_RETRIES", "2"))
+    # Phase 2 reliability requirement: Azure OpenAI timeout must not exceed 20s.
+    timeout_seconds = min(float(os.getenv("AZURE_OPENAI_TIMEOUT_SECONDS", "20")), 20.0)
     client = AzureOpenAI(
         api_key=api_key,
         api_version=api_version,
         azure_endpoint=endpoint,
         timeout=timeout_seconds,
-        max_retries=max_retries,
+        max_retries=0,
     )
     schema = _structured_schema()
-    response = client.chat.completions.create(
-        model=deployment,
-        temperature=0,
-        timeout=timeout_seconds,
-        response_format={
-            "type": "json_schema",
-            "json_schema": {"name": "RevenueEraStructuredV1", "schema": schema, "strict": True},
-        },
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a deterministic parser that converts ERA layout extraction JSON into a strict schema. "
-                    "Input contains pages[].lines[].text and pages[].tables[].cells[]. "
-                    "Use integer cents only, do not emit floats. Omit any PHI fields."
-                ),
+    azure_client = AzureReliabilityClient()
+
+    def _operation():
+        return client.chat.completions.create(
+            model=deployment,
+            temperature=0,
+            timeout=timeout_seconds,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "RevenueEraStructuredV1", "schema": schema, "strict": True},
             },
-            {"role": "user", "content": json.dumps(extracted_json)},
-        ],
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a deterministic parser that converts ERA layout extraction JSON into a strict schema. "
+                        "Input contains pages[].lines[].text and pages[].tables[].cells[]. "
+                        "Use integer cents only, do not emit floats. Omit any PHI fields."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(extracted_json)},
+            ],
+        )
+
+    call = azure_client.call(
+        stage="openai_structuring",
+        request_id=request_id,
+        timeout_seconds=timeout_seconds,
+        operation=_operation,
     )
-    request_id = getattr(response, "_request_id", None)
+    if not call.ok or call.value is None:
+        raise AzureClientError(
+            stage="openai_structuring",
+            error_code=call.error_code or "azure_unavailable",
+            request_id=request_id,
+        )
+    response = call.value
     try:
         content = response.choices[0].message.content
     except Exception as exc:  # noqa: BLE001
-        err = RuntimeError("Azure OpenAI response missing content")
-        setattr(err, "request_id", request_id)
-        raise err from exc
+        raise AzureClientError(
+            stage="openai_structuring",
+            error_code="azure_invalid_response",
+            request_id=request_id,
+        ) from exc
     if not content:
-        err = RuntimeError("Azure OpenAI returned empty content")
-        setattr(err, "request_id", request_id)
-        raise err
+        raise AzureClientError(
+            stage="openai_structuring",
+            error_code="azure_invalid_response",
+            request_id=request_id,
+        )
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError as exc:
-        err = RuntimeError("Azure OpenAI returned invalid JSON")
-        setattr(err, "request_id", request_id)
-        raise err from exc
+        raise AzureClientError(
+            stage="openai_structuring",
+            error_code="azure_invalid_response",
+            request_id=request_id,
+        ) from exc
     try:
         return RevenueEraStructuredV1.model_validate(parsed)
-    except ValidationError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        err = RuntimeError(f"Structured schema validation failed: {exc}")
-        setattr(err, "request_id", request_id)
-        raise err from exc
+    except ValidationError as exc:
+        raise AzureClientError(
+            stage="openai_structuring",
+            error_code="azure_invalid_response",
+            request_id=request_id,
+        ) from exc
 
 
 def _match_status(raw: str | None) -> str:
