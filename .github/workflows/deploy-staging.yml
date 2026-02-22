@@ -13,6 +13,7 @@ permissions:
 env:
   RESOURCE_GROUP: vehr-revos-staging-rg
   CONTAINERAPP_NAME: vehr-revos-staging
+  MIGRATION_JOB_NAME: vehr-revos-staging-migrate
   ACR_NAME: vehrrevostagingacr
   ACR_LOGIN_SERVER: vehrrevostagingacr.azurecr.io
   IMAGE_NAME: vehr-api
@@ -67,6 +68,74 @@ jobs:
             .
 
           echo "FULL_IMAGE=$FULL_IMAGE" >> $GITHUB_ENV
+
+      # -----------------------------
+      # Run migrations via ACA Job
+      # -----------------------------
+      - name: Run migration job and wait
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ENVIRONMENT_ID="$(az containerapp show \
+            --name "$CONTAINERAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "properties.managedEnvironmentId" \
+            -o tsv)"
+
+          if az containerapp job show \
+            --name "$MIGRATION_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            >/dev/null 2>&1; then
+            az containerapp job update \
+              --name "$MIGRATION_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$FULL_IMAGE" \
+              --command alembic upgrade head
+          else
+            az containerapp job create \
+              --name "$MIGRATION_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$ENVIRONMENT_ID" \
+              --trigger-type Manual \
+              --replica-timeout 1800 \
+              --replica-retry-limit 0 \
+              --replica-completion-count 1 \
+              --parallelism 1 \
+              --image "$FULL_IMAGE" \
+              --cpu 0.5 \
+              --memory 1.0Gi \
+              --command alembic upgrade head
+          fi
+
+          JOB_EXECUTION_NAME="$(az containerapp job start \
+            --name "$MIGRATION_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$FULL_IMAGE" \
+            --query "name" \
+            -o tsv)"
+
+          echo "Started migration execution: $JOB_EXECUTION_NAME"
+          for i in {1..72}; do
+            EXEC_STATUS="$(az containerapp job execution show \
+              --name "$MIGRATION_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --job-execution-name "$JOB_EXECUTION_NAME" \
+              --query "properties.status" \
+              -o tsv)"
+
+            echo "[$i/72] status=$EXEC_STATUS"
+            if [ "$EXEC_STATUS" = "Succeeded" ]; then
+              exit 0
+            fi
+            if [ "$EXEC_STATUS" = "Failed" ]; then
+              echo "Migration job failed"
+              exit 1
+            fi
+            sleep 5
+          done
+
+          echo "Migration job did not complete in time"
+          exit 1
 
       # -----------------------------
       # Deploy to Container Apps
