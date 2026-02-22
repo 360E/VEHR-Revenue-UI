@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import os
 import sys
 
@@ -30,6 +31,44 @@ def test_startup_skips_when_flag_set(monkeypatch: pytest.MonkeyPatch) -> None:
     with TestClient(app) as client:
         response = client.get("/health")
         assert response.status_code == 200
+
+
+@pytest.mark.parametrize("enabled_value", [None, "false"])
+def test_startup_allows_missing_ringcentral_when_realtime_disabled(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, enabled_value: str | None
+) -> None:
+    monkeypatch.delenv("SKIP_STARTUP_CHECKS", raising=False)
+    if enabled_value is None:
+        monkeypatch.delenv("RINGCENTRAL_REALTIME_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("RINGCENTRAL_REALTIME_ENABLED", enabled_value)
+    monkeypatch.delenv("RINGCENTRAL_CLIENT_ID", raising=False)
+    monkeypatch.delenv("RINGCENTRAL_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("RINGCENTRAL_SERVER_URL", raising=False)
+    monkeypatch.delenv("RINGCENTRAL_REDIRECT_URI", raising=False)
+    caplog.set_level(logging.INFO, logger="app.main")
+
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.get("/api/v1/readyz")
+
+    assert response.status_code in {200, 503}
+    assert [record.message for record in caplog.records].count("ringcentral_realtime_disabled") == 1
+
+
+def test_startup_fails_when_ringcentral_realtime_enabled_without_client_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SKIP_STARTUP_CHECKS", raising=False)
+    monkeypatch.setenv("RINGCENTRAL_REALTIME_ENABLED", "true")
+    monkeypatch.delenv("RINGCENTRAL_CLIENT_ID", raising=False)
+
+    app = create_app()
+    with pytest.raises(RuntimeError) as excinfo:
+        with TestClient(app):
+            pass
+
+    assert "RINGCENTRAL_CLIENT_ID" in str(excinfo.value)
 
 
 def test_startup_fails_when_tanner_enabled_without_key(monkeypatch: pytest.MonkeyPatch) -> None:

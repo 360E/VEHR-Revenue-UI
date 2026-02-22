@@ -366,7 +366,9 @@ curl "http://127.0.0.1:8000/api/v1/uploads/<key-from-presign-response>/download"
 
 RingCentral integration (OAuth + realtime)
 
-Required API env vars (startup fails fast if missing):
+`RINGCENTRAL_REALTIME_ENABLED` (default: `false`) controls whether realtime startup validation is enforced.
+
+Required API env vars (only when `RINGCENTRAL_REALTIME_ENABLED=true`):
 
 - INTEGRATION_TOKEN_KEY
 - RINGCENTRAL_CLIENT_ID
