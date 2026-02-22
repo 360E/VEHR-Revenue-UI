@@ -1939,7 +1939,7 @@ def test_fail_once_structuring_retry_is_atomic_and_deterministic(tmp_path, monke
         app.dependency_overrides.clear()
 
 
-def test_determinism_proof_fail_once_retry_hash_matches_baseline(tmp_path, monkeypatch) -> None:
+def test_determinism_proof_fail_once_retry_hash_matches_baseline(tmp_path, monkeypatch, auth_headers) -> None:
     session_factory = _setup_sqlite(tmp_path)
     token, org_id = _seed_admin(session_factory)
     monkeypatch.setattr(revenue_era, "_repo_root", lambda: tmp_path)
@@ -1975,13 +1975,13 @@ def test_determinism_proof_fail_once_retry_hash_matches_baseline(tmp_path, monke
             baseline_upload = client.post(
                 "/api/v1/revenue/era-pdfs/upload",
                 files=[("files", ("baseline.pdf", b"%PDF-1.4 baseline", "application/pdf"))],
-                headers={"Authorization": f"******"},
+                headers=auth_headers(token),
             )
             assert baseline_upload.status_code == 200
             baseline_id = baseline_upload.json()[0]["id"]
             baseline_process = client.post(
                 f"/api/v1/revenue/era-pdfs/{baseline_id}/process",
-                headers={"Authorization": f"******"},
+                headers=auth_headers(token),
             )
             assert baseline_process.status_code == 200
 
@@ -1990,19 +1990,19 @@ def test_determinism_proof_fail_once_retry_hash_matches_baseline(tmp_path, monke
             retry_upload = client.post(
                 "/api/v1/revenue/era-pdfs/upload",
                 files=[("files", ("retry.pdf", b"%PDF-1.4 retry", "application/pdf"))],
-                headers={"Authorization": f"******"},
+                headers=auth_headers(token),
             )
             assert retry_upload.status_code == 200
             retry_id = retry_upload.json()[0]["id"]
             retry_fail = client.post(
                 f"/api/v1/revenue/era-pdfs/{retry_id}/process",
-                headers={"Authorization": f"******"},
+                headers=auth_headers(token),
             )
             assert retry_fail.status_code == 502
             retry_fail_request_id = retry_fail.json()["request_id"]
             retry_success = client.post(
                 f"/api/v1/revenue/era-pdfs/{retry_id}/process",
-                headers={"Authorization": f"******"},
+                headers=auth_headers(token),
             )
             assert retry_success.status_code == 200
             assert retry_success.json()["request_id"] != retry_fail_request_id
