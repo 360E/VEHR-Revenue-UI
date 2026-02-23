@@ -39,7 +39,6 @@ def upgrade() -> None:
             ),
         )
 
-    # Index (guarded)
     claim_indexes = [ix["name"] for ix in inspector.get_indexes("claims")]
     if "ix_claims_status" not in claim_indexes:
         op.create_index("ix_claims_status", "claims", ["status"], unique=False)
@@ -54,6 +53,7 @@ def upgrade() -> None:
 
     # ---- claim_events.amount + job_id (guarded) ----
     claim_event_columns = [c["name"] for c in inspector.get_columns("claim_events")]
+
     if "amount" not in claim_event_columns:
         op.add_column(
             "claim_events",
@@ -65,26 +65,33 @@ def upgrade() -> None:
             "claim_events",
             sa.Column("job_id", sa.String(length=64), nullable=True),
         )
-        op.execute("UPDATE claim_events SET job_id = source_job_id")
 
-    # Rebuild unique constraint (guard drop; always create)
+    # Only copy if source_job_id exists in this DB schema
+    # (some branches/older graphs may not have it at all)
+    claim_event_columns = [c["name"] for c in inspector.get_columns("claim_events")]
+    if "source_job_id" in claim_event_columns:
+        op.execute("UPDATE claim_events SET job_id = source_job_id WHERE job_id IS NULL")
+
+    # Rebuild unique constraint (be defensive about drop)
     try:
         op.drop_constraint("uq_claim_event_per_job", "claim_events", type_="unique")
     except Exception:
         pass
 
-    op.create_unique_constraint(
-        "uq_claim_event_per_job",
-        "claim_events",
-        ["claim_id", "event_type", "job_id"],
-    )
+    # Create the new constraint only if job_id exists (it should, but guard anyway)
+    claim_event_columns = [c["name"] for c in inspector.get_columns("claim_events")]
+    if "job_id" in claim_event_columns:
+        op.create_unique_constraint(
+            "uq_claim_event_per_job",
+            "claim_events",
+            ["claim_id", "event_type", "job_id"],
+        )
 
     # ---- claim_ledgers status enum refactor (guarded) ----
     ledger_columns = [c["name"] for c in inspector.get_columns("claim_ledgers")]
 
-    # Only run the destructive rename/drop sequence once.
+    # Only run destructive rename/drop sequence once.
     if "status_new" not in ledger_columns:
-        # Drop old index if present (it should be, but be defensive)
         try:
             op.drop_index("ix_claim_ledgers_status", table_name="claim_ledgers")
         except Exception:
@@ -116,6 +123,7 @@ def upgrade() -> None:
         op.alter_column("claim_ledgers", "status_new", new_column_name="status")
         op.create_index("ix_claim_ledgers_status", "claim_ledgers", ["status"], unique=False)
 
+        # Backfill claims.status from claim_ledgers
         op.execute(
             """
             UPDATE claims
@@ -125,7 +133,7 @@ def upgrade() -> None:
             """
         )
 
-    # Remove defaults (safe even if column pre-existed)
+    # Remove defaults (safe even if claims.status existed before)
     op.alter_column("claims", "status", server_default=None)
     op.alter_column("claim_ledgers", "status", server_default=None)
 
