@@ -17,6 +17,18 @@ branch_labels = None
 depends_on = None
 
 
+def _colnames(inspector: sa.Inspector, table: str) -> set[str]:
+    return {c["name"] for c in inspector.get_columns(table)}
+
+
+def _index_names(inspector: sa.Inspector, table: str) -> set[str]:
+    return {ix["name"] for ix in inspector.get_indexes(table) if ix.get("name")}
+
+
+def _unique_names(inspector: sa.Inspector, table: str) -> set[str]:
+    return {uc["name"] for uc in inspector.get_unique_constraints(table) if uc.get("name")}
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     dialect = bind.dialect.name
@@ -26,61 +38,48 @@ def upgrade() -> None:
     if dialect == "postgresql":
         claim_status_enum.create(bind, checkfirst=True)
 
+    # Refresh schema facts as we go (since we mutate schema in this migration)
+    claims_cols = _colnames(inspector, "claims")
+    claims_ix = _index_names(inspector, "claims")
+
     # ---- claims.status (guarded) ----
-    claim_columns = [c["name"] for c in inspector.get_columns("claims")]
-    if "status" not in claim_columns:
+    if "status" not in claims_cols:
         op.add_column(
             "claims",
-            sa.Column(
-                "status",
-                claim_status_enum,
-                nullable=False,
-                server_default="OPEN",
-            ),
+            sa.Column("status", claim_status_enum, nullable=False, server_default="OPEN"),
         )
 
-    claim_indexes = [ix["name"] for ix in inspector.get_indexes("claims")]
-    if "ix_claims_status" not in claim_indexes:
+    # index (guarded)
+    if "ix_claims_status" not in claims_ix:
         op.create_index("ix_claims_status", "claims", ["status"], unique=False)
 
     # ---- claim_lines.billed_amount (guarded) ----
-    claim_line_columns = [c["name"] for c in inspector.get_columns("claim_lines")]
-    if "billed_amount" not in claim_line_columns:
-        op.add_column(
-            "claim_lines",
-            sa.Column("billed_amount", sa.Numeric(14, 2), nullable=True),
-        )
+    claim_lines_cols = _colnames(inspector, "claim_lines")
+    if "billed_amount" not in claim_lines_cols:
+        op.add_column("claim_lines", sa.Column("billed_amount", sa.Numeric(14, 2), nullable=True))
 
     # ---- claim_events.amount + job_id (guarded) ----
-    claim_event_columns = [c["name"] for c in inspector.get_columns("claim_events")]
+    claim_events_cols = _colnames(inspector, "claim_events")
 
-    if "amount" not in claim_event_columns:
-        op.add_column(
-            "claim_events",
-            sa.Column("amount", sa.Numeric(14, 2), nullable=True),
-        )
+    if "amount" not in claim_events_cols:
+        op.add_column("claim_events", sa.Column("amount", sa.Numeric(14, 2), nullable=True))
 
-    if "job_id" not in claim_event_columns:
-        op.add_column(
-            "claim_events",
-            sa.Column("job_id", sa.String(length=64), nullable=True),
-        )
+    if "job_id" not in claim_events_cols:
+        op.add_column("claim_events", sa.Column("job_id", sa.String(length=64), nullable=True))
 
-    # Only copy if source_job_id exists in this DB schema
-    # (some branches/older graphs may not have it at all)
-    claim_event_columns = [c["name"] for c in inspector.get_columns("claim_events")]
-    if "source_job_id" in claim_event_columns:
+    # Copy source_job_id -> job_id only if source_job_id exists
+    claim_events_cols = _colnames(inspector, "claim_events")
+    if "source_job_id" in claim_events_cols:
         op.execute("UPDATE claim_events SET job_id = source_job_id WHERE job_id IS NULL")
 
-    # Rebuild unique constraint (be defensive about drop)
-    try:
+    # Rebuild unique constraint safely (inspect first; do NOT try/except DDL)
+    claim_events_uniques = _unique_names(inspector, "claim_events")
+    if "uq_claim_event_per_job" in claim_events_uniques:
         op.drop_constraint("uq_claim_event_per_job", "claim_events", type_="unique")
-    except Exception:
-        pass
 
-    # Create the new constraint only if job_id exists (it should, but guard anyway)
-    claim_event_columns = [c["name"] for c in inspector.get_columns("claim_events")]
-    if "job_id" in claim_event_columns:
+    # Only create new constraint if job_id exists
+    claim_events_cols = _colnames(inspector, "claim_events")
+    if "job_id" in claim_events_cols:
         op.create_unique_constraint(
             "uq_claim_event_per_job",
             "claim_events",
@@ -88,50 +87,60 @@ def upgrade() -> None:
         )
 
     # ---- claim_ledgers status enum refactor (guarded) ----
-    ledger_columns = [c["name"] for c in inspector.get_columns("claim_ledgers")]
+    claim_ledgers_cols = _colnames(inspector, "claim_ledgers")
 
-    # Only run destructive rename/drop sequence once.
-    if "status_new" not in ledger_columns:
-        try:
+    # Only run the destructive rename/drop sequence once.
+    if "status_new" not in claim_ledgers_cols:
+        claim_ledgers_ix = _index_names(inspector, "claim_ledgers")
+        if "ix_claim_ledgers_status" in claim_ledgers_ix:
             op.drop_index("ix_claim_ledgers_status", table_name="claim_ledgers")
-        except Exception:
-            pass
 
         op.add_column(
             "claim_ledgers",
-            sa.Column(
-                "status_new",
-                claim_status_enum,
-                nullable=True,
-                server_default="OPEN",
-            ),
+            sa.Column("status_new", claim_status_enum, nullable=True, server_default="OPEN"),
         )
-        op.execute(
-            """
-            UPDATE claim_ledgers
-            SET status_new = CASE status
-                WHEN 'PAID_IN_FULL' THEN 'PAID'
-                WHEN 'OVERPAID' THEN 'PAID'
-                WHEN 'PARTIAL_PAYMENT' THEN 'PARTIAL'
-                WHEN 'DENIED' THEN 'DENIED'
-                ELSE 'OPEN'
-            END::claim_status
-            """
-        )
-        op.alter_column("claim_ledgers", "status_new", nullable=False, server_default="OPEN")
-        op.drop_column("claim_ledgers", "status")
-        op.alter_column("claim_ledgers", "status_new", new_column_name="status")
-        op.create_index("ix_claim_ledgers_status", "claim_ledgers", ["status"], unique=False)
 
-        # Backfill claims.status from claim_ledgers
-        op.execute(
-            """
-            UPDATE claims
-            SET status = cl.status
-            FROM claim_ledgers cl
-            WHERE cl.claim_id = claims.id
-            """
-        )
+        # If old status column exists, migrate values
+        claim_ledgers_cols = _colnames(inspector, "claim_ledgers")
+        if "status" in claim_ledgers_cols:
+            op.execute(
+                """
+                UPDATE claim_ledgers
+                SET status_new = CASE status
+                    WHEN 'PAID_IN_FULL' THEN 'PAID'
+                    WHEN 'OVERPAID' THEN 'PAID'
+                    WHEN 'PARTIAL_PAYMENT' THEN 'PARTIAL'
+                    WHEN 'DENIED' THEN 'DENIED'
+                    ELSE 'OPEN'
+                END::claim_status
+                """
+            )
+
+            op.alter_column("claim_ledgers", "status_new", nullable=False, server_default="OPEN")
+            op.drop_column("claim_ledgers", "status")
+            op.alter_column("claim_ledgers", "status_new", new_column_name="status")
+        else:
+            # If there was no old status, just enforce non-null + rename
+            op.alter_column("claim_ledgers", "status_new", nullable=False, server_default="OPEN")
+            op.alter_column("claim_ledgers", "status_new", new_column_name="status")
+
+        # Recreate index on claim_ledgers.status (guarded)
+        claim_ledgers_ix = _index_names(inspector, "claim_ledgers")
+        if "ix_claim_ledgers_status" not in claim_ledgers_ix:
+            op.create_index("ix_claim_ledgers_status", "claim_ledgers", ["status"], unique=False)
+
+        # Backfill claims.status from claim_ledgers if claim_ledgers has claim_id and status
+        claim_ledgers_cols = _colnames(inspector, "claim_ledgers")
+        claims_cols = _colnames(inspector, "claims")
+        if {"claim_id", "status"}.issubset(claim_ledgers_cols) and "status" in claims_cols:
+            op.execute(
+                """
+                UPDATE claims
+                SET status = cl.status
+                FROM claim_ledgers cl
+                WHERE cl.claim_id = claims.id
+                """
+            )
 
     # Remove defaults (safe even if claims.status existed before)
     op.alter_column("claims", "status", server_default=None)
