@@ -12,8 +12,8 @@ permissions:
 
 env:
   RESOURCE_GROUP: vehr-revos-staging-rg
-  CONTAINERAPP_NAME: vehr-revos-staging
-  MIGRATION_JOB_NAME: vehr-revos-staging-migrate
+  CONTAINERAPP_NAME: vehr-revos-staging-eus2
+  MIGRATION_JOB_NAME: vehr-revos-staging-migrate-eus2
   ACR_NAME: vehrrevostagingacr
   ACR_LOGIN_SERVER: vehrrevostagingacr.azurecr.io
   IMAGE_NAME: vehr-api
