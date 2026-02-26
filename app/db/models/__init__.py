@@ -58,8 +58,23 @@ from app.db.models.reception_call_workflow import ReceptionCallWorkflow  # noqa:
 from app.db.models.recon_claim_result import ReconClaimResult  # noqa: F401
 from app.db.models.recon_import_job import ReconImportJob  # noqa: F401
 from app.db.models.recon_line_result import ReconLineResult  # noqa: F401
+from app.db.models.claim import Claim  # noqa: F401
+from app.db.models.claim_line import ClaimLine  # noqa: F401
+from app.db.models.claim_event import ClaimEvent  # noqa: F401
+from app.db.models.claim_ledger import ClaimLedger  # noqa: F401
+from app.db.models.revenue_era import (  # noqa: F401
+    RevenueEraClaimLine,
+    RevenueEraExtractResult,
+    RevenueEraFile,
+    RevenueEraProcessingLog,
+    RevenueEraStructuredResult,
+    RevenueEraValidationReport,
+    RevenueEraWorkItem,
+)
+from app.db.models.revenue_external_claim_link import RevenueExternalClaimLink  # noqa: F401
 from app.db.models.rpt_kpi_daily import RptKpiDaily  # noqa: F401
 from app.db.models.rpt_kpi_snapshot import RptKpiSnapshot  # noqa: F401
+from app.db.models.revenue_command_snapshot import RevenueCommandSnapshot  # noqa: F401
 from app.db.models.service import Service  # noqa: F401
 from app.db.models.service_document_template import ServiceDocumentTemplate  # noqa: F401
 from app.db.models.task import Task  # noqa: F401
@@ -70,3 +85,5 @@ from app.db.models.scribe_note_draft import ScribeNoteDraft  # noqa: F401
 from app.db.models.scribe_transcript import ScribeTranscript  # noqa: F401
 from app.db.models.webhook_delivery import WebhookDelivery  # noqa: F401
 from app.db.models.webhook_endpoint import WebhookEndpoint  # noqa: F401
+from app.db.models.document_analysis import DocumentAnalysis  # noqa: F401
+from app.db.models.pdf_template_registry import PdfTemplateRegistry  # noqa: F401

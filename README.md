@@ -31,8 +31,11 @@ Required env vars:
 - GITHUB_APP_PRIVATE_KEY_PEM (preferred) or GITHUB_APP_PRIVATE_KEY_PATH
 - Plus any existing required env vars documented below (RingCentral, OpenAI, storage, etc.)
 
-Render deployment (agent-only)
-Set NEXUS_AGENT_MODE=1 to skip RingCentral startup validation for AI agent workloads.
+Deployment (GitHub Actions -> Azure Container Apps)
+- Staging deploys are handled by `.github/workflows/deploy-staging.yml`.
+- Trigger conditions: `push` to `main` and `workflow_dispatch` only.
+- This repository no longer includes any Render integration.
+- Set `NEXUS_AGENT_MODE=1` to skip RingCentral startup validation for AI agent workloads.
 
 Example Docker run:
 docker build -t vehr-nexus .
@@ -152,6 +155,75 @@ POST /api/v1/auth/bootstrap with:
 Use the returned token as:
 Authorization: Bearer <token>
 
+Run Revenue OS Standalone
+
+1. Copy env template and set required Azure + DB vars:
+    - cp .env.example .env
+   - export DATABASE_URL=postgresql+psycopg://vehr:vehr@localhost:5432/vehr
+   - export AZURE_DOCINTEL_ENDPOINT=...
+   - export AZURE_DOCINTEL_KEY=...
+   - export AZURE_DOCINTEL_MODEL=prebuilt-layout
+   - export AZURE_OPENAI_ENDPOINT=...
+   - export AZURE_OPENAI_API_KEY=...
+   - export AZURE_OPENAI_DEPLOYMENT=...
+   - export AZURE_OPENAI_API_VERSION=...
+   - export LOCAL_DEV=1
+   - export BOOTSTRAP_ENABLED=1
+2. Start Postgres and run migrations:
+   - make db-up
+   - make migrate
+3. Start API:
+   - make run
+4. Bootstrap org/admin (requires `BOOTSTRAP_ENABLED=1`):
+   - make bootstrap-local
+5. Login, upload ERA, process, and review worklist:
+    - POST /api/v1/auth/login
+    - Use frontend page: /revenue/era-intake
+    - Use debug endpoint: GET /api/v1/revenue/era-pdfs/{era_file_id}/debug
+    - Verify login only: `python scripts/era_ops.py login --base-url http://127.0.0.1:8000 --email admin@example.com --password ChangeMeNow!`
+    - Or run ops CLI bulk ingest: `python scripts/era_ops.py ingest --dir /absolute/path/to/era-pdfs --base-url http://127.0.0.1:8000 --email admin@example.com --password ChangeMeNow!`
+    - Watch-folder mode: `python scripts/era_ops.py ingest --dir /absolute/path/to/watch --watch --base-url http://127.0.0.1:8000 --email admin@example.com --password ChangeMeNow!`
+    - Set password once in env: `export VEHR_PASSWORD=ChangeMeNow!`
+    - Make targets (same command flow):
+      - `make era-login BASE_URL=http://127.0.0.1:8000 EMAIL=admin@example.com`
+      - `make era-ingest DIR=/absolute/path/to/era-pdfs BASE_URL=http://127.0.0.1:8000 EMAIL=admin@example.com`
+      - `make era-watch DIR=/absolute/path/to/watch POLL_SECONDS=2 BASE_URL=http://127.0.0.1:8000 EMAIL=admin@example.com`
+6. Tests:
+    - make test
+    - make test-pg
+
+Stress & Concurrency Validation
+
+- Fixture set lives in `tests/fixtures/era/`:
+  - `large_20p.pdf`, `large_50p.pdf`, `large_100p.pdf`
+  - `malformed_truncated.pdf`, `malformed_not_pdf.pdf`, `encrypted.pdf`
+- Run repeatable load harness:
+  - `DATABASE_URL=... python scripts/load_test.py --dir /absolute/path/to/tests/fixtures/era --base-url http://127.0.0.1:8000 --email admin@example.com --password ChangeMeNow! --mode processes --workers 5 --iterations 1 --memory-ceiling-mb 1024`
+  - Re-run with `--workers 20` and `--workers 50` for concurrency matrix.
+- Harness output includes:
+  - success/failure rate, failure rate by `error_code`
+  - p50/p95/p99 latency and per-stage `duration_ms` percentiles
+  - max RSS memory observed across worker processes and memory-ceiling gate
+  - DB invariant pass/fail, failing invariant names/counts, determinism failure tracking
+  - failed runs print `request_id` only (no PHI, no raw exceptions)
+
+Installable local app (PWA)
+
+- Open `http://localhost:3000` in Chrome or Edge.
+- Use browser menu -> Install app (`Install 360 Encompass Revenue OS`).
+
+## Local Smoke Test
+
+Prerequisites:
+
+- `docker compose up -d`
+- `alembic upgrade head`
+- `python -m uvicorn app.main:app --reload`
+
+Run:
+
+- `make local-smoke FILE=/absolute/path/to/era.pdf`
+
 Invite emails (SMTP configuration)
 
 To send user invites by email, set all of the following API env vars:
@@ -226,6 +298,12 @@ Check models are only imported in models/__init__.py
 
 Check main.py imports app.db.models on startup
 
+Revenue ERA processing failures
+
+- If `stage=extract`: verify `AZURE_DOCINTEL_ENDPOINT`, `AZURE_DOCINTEL_KEY`, and `AZURE_DOCINTEL_MODEL=prebuilt-layout`.
+- If `stage=structuring`: verify `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`, and `AZURE_OPENAI_API_VERSION`.
+- If failures show timeout codes: verify Azure SDK timeout/retry envs (`AZURE_DOCINTEL_*_TIMEOUT_SECONDS`, `AZURE_DOCINTEL_MAX_RETRIES`, `AZURE_OPENAI_TIMEOUT_SECONDS`, `AZURE_OPENAI_MAX_RETRIES`) and Azure quota.
+
 📌 Roadmap (High Level)
 
 ✅ Patients (v1)
@@ -291,7 +369,9 @@ curl "http://127.0.0.1:8000/api/v1/uploads/<key-from-presign-response>/download"
 
 RingCentral integration (OAuth + realtime)
 
-Required API env vars (startup fails fast if missing):
+`RINGCENTRAL_REALTIME_ENABLED` (default: `false`) controls whether realtime startup validation is enforced.
+
+Required API env vars (only when `RINGCENTRAL_REALTIME_ENABLED=true`):
 
 - INTEGRATION_TOKEN_KEY
 - RINGCENTRAL_CLIENT_ID

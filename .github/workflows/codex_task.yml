@@ -1,5 +1,4 @@
 name: Codex Task
-
 on:
   workflow_dispatch:
     inputs:
@@ -10,58 +9,131 @@ on:
         description: "Risk level"
         required: false
         default: "low"
+      retry_count:
+        description: "Auto-retry counter (internal). Do not set manually."
+        required: false
+        default: "0"
 
 permissions:
   contents: write
   pull-requests: write
-  issues: read
+  issues: write
+  actions: write
 
 jobs:
   codex:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Fetch issue body
-        id: issue
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          import sys
-          import urllib.request
 
-          repo = os.environ.get('GITHUB_REPOSITORY')
-          issue_number = os.environ.get('ISSUE_NUMBER')
-          token = os.environ.get('GITHUB_TOKEN')
-          if not repo or not issue_number or not token:
-            sys.exit('Missing repository, issue number, or token')
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "GH_TOKEN is not set"
+            exit 1
+          fi
 
-          url = f"https://api.github.com/repos/{repo}/issues/{issue_number}"
-          req = urllib.request.Request(url)
-          req.add_header('Authorization', f'Bearer {token}')
-          req.add_header('Accept', 'application/vnd.github+json')
-          req.add_header('X-GitHub-Api-Version', '2022-11-28')
+          api="https://api.github.com/repos/${REPO}/issues/${ISSUE_NUMBER}"
+          echo "Fetching: ${api}"
 
-          with urllib.request.urlopen(req) as response:
-            body = response.read().decode('utf-8')
-            data = json.loads(body)
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${api}" \
+            | jq -r '.body // ""' > /tmp/issue_body.txt
 
-          issue_body = data.get('body') or ''
-          with open('/tmp/issue_body.txt', 'w', encoding='utf-8') as handle:
-            handle.write(issue_body)
-          PY
+          echo "Wrote /tmp/issue_body.txt"
+          wc -c /tmp/issue_body.txt || true
 
       - name: Run Codex
         id: codex
+        continue-on-error: true
         uses: openai/codex-action@v1
         with:
           prompt-file: /tmp/issue_body.txt
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Comment on issue if Codex failed
+        if: steps.codex.conclusion == 'failure'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          RETRY_COUNT: ${{ inputs.retry_count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          attempt_number=$(( ${RETRY_COUNT:-0} + 1 ))
+          body=$(printf "Codex workflow attempt %s failed.\n\nRun: %s\n" "${attempt_number}" "${RUN_URL}")
+
+          api="https://api.github.com/repos/${REPO}/issues/${ISSUE_NUMBER}/comments"
+          payload=$(jq -n --arg body "$body" '{body:$body}')
+
+          echo "Posting issue comment to ${api}"
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${api}" \
+            -d "${payload}" >/dev/null
+
+      - name: Auto re-run workflow if Codex failed (max 20 attempts)
+        if: steps.codex.conclusion == 'failure'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_FILE: codex_task.yml
+          REF: main
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          RISK: ${{ inputs.risk }}
+          RETRY_COUNT: ${{ inputs.retry_count }}
+        run: |
+          set -euo pipefail
+
+          max_attempts=20
+          current="${RETRY_COUNT:-0}"
+
+          if [[ "$current" -ge $((max_attempts-1)) ]]; then
+            echo "Reached max attempts (${max_attempts}). Not re-running."
+            exit 0
+          fi
+
+          next=$((current+1))
+
+          api="https://api.github.com/repos/${REPO}/actions/workflows/${WORKFLOW_FILE}/dispatches"
+          payload=$(jq -n \
+            --arg ref "${REF}" \
+            --arg issue_number "${ISSUE_NUMBER}" \
+            --arg risk "${RISK}" \
+            --arg retry_count "${next}" \
+            '{ref:$ref, inputs:{issue_number:$issue_number, risk:$risk, retry_count:$retry_count}}')
+
+          echo "Dispatching next attempt retry_count=${next} via ${api}"
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${api}" \
+            -d "${payload}" >/dev/null
+
+      - name: Mark run as failed if Codex failed
+        if: steps.codex.conclusion == 'failure'
+        shell: bash
+        run: |
+          echo "Failing this run because Codex failed (a retry may have been dispatched)."
+          exit 1

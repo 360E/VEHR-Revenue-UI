@@ -7,6 +7,9 @@
   --token-shadow-sm: var(--shadow-sm);
   --token-shadow-md: var(--shadow-md);
   --token-card-radius: var(--radius-card);
+  --font-space-grotesk: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+  --font-jetbrains-mono: "JetBrains Mono", "SFMono-Regular", "Menlo", "Monaco", "Consolas", "Liberation Mono",
+    "Courier New", monospace;
 }
 
 @theme inline {

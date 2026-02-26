@@ -11,20 +11,12 @@ export class ApiError extends Error {
   }
 }
 
-const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
-const CUTOVER_FRONTEND_HOSTS = new Set(["360-encompass.com", "www.360-encompass.com"]);
-const CUTOVER_API_BASE_URL = "https://api.360-encompass.com";
+const DEFAULT_API_BASE_URL = "http://localhost:8000";
 
 export function getApiBaseUrl() {
   const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
   if (configured) {
     return configured;
-  }
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname.toLowerCase();
-    if (CUTOVER_FRONTEND_HOSTS.has(host)) {
-      return CUTOVER_API_BASE_URL;
-    }
   }
   return DEFAULT_API_BASE_URL;
 }
@@ -34,8 +26,11 @@ export function buildUrl(path: string) {
     return path;
   }
 
-  const baseUrl = getApiBaseUrl().replace(/\/$/, "");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  if (typeof window !== "undefined" && (normalizedPath === "/api" || normalizedPath.startsWith("/api/"))) {
+    return normalizedPath;
+  }
+  const baseUrl = getApiBaseUrl().replace(/\/$/, "");
   return `${baseUrl}${normalizedPath}`;
 }
 

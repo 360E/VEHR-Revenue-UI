@@ -181,6 +181,9 @@ export default function EraImportPage() {
         <p className="max-w-3xl text-base text-slate-600">
           Upload ERA and billed claims PDFs, then reconcile automatically.
         </p>
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          This page is deprecated. Use Revenue -&gt; ERA Intake.
+        </div>
       </div>
 
       <form className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]" onSubmit={handleSubmit}>

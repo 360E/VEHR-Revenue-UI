@@ -1,5 +1,5 @@
 **Overview**
-This guide prepares The Daily Dose (EHR) for always-on dev deployment with Neon Postgres, Render (Docker), and Vercel. Alembic remains the single source of truth for schema changes.
+This guide prepares The Daily Dose (EHR) for always-on dev deployment with Neon Postgres, Azure Container Apps, and Vercel. Alembic remains the single source of truth for schema changes.
 
 **Neon Postgres**
 1. Create a Neon project and database.
@@ -22,10 +22,10 @@ $env:DATABASE_URL="postgresql://USER:PASSWORD@HOST:PORT/DB?sslmode=require"
 alembic upgrade head
 ```
 
-**Render Web Service (Docker)**
-1. Ensure `render.yaml` is at the repo root and `Dockerfile` is present.
-2. Create a Render Blueprint service from the repo. The blueprint config is ready for Docker.
-3. Set these environment variables for the service:
+**Azure Container Apps API Service (Docker)**
+1. Ensure `Dockerfile` is present at the repo root.
+2. Use `.github/workflows/deploy-staging.yml` to build/push the image and deploy to Azure Container Apps.
+3. Set these environment variables for the container app:
 
 `DATABASE_URL` = Neon connection string  
 `AUTO_CREATE_TABLES` = `false`  
@@ -58,13 +58,13 @@ Optional (required for webhook subscription flow):
 
 Notes:
 `AUTO_CREATE_TABLES` stays off so Alembic is the schema source of truth.  
-Render supplies `PORT` automatically for the Docker container.
+Azure Container Apps supplies `PORT` for the Docker container.
 
 **Vercel Frontend**
 1. Deploy the `frontend` directory as the project root.
 2. Set the environment variable:
 
-`NEXT_PUBLIC_API_BASE_URL` = `https://<your-render-service-domain>`
+`NEXT_PUBLIC_API_BASE_URL` = `https://<your-azure-container-app-domain>`
 `NEXT_PUBLIC_API_TOKEN` = `Bearer token` (optional for dev; use a token from `/api/v1/auth/login`)
 `NEXT_PUBLIC_AUTH_COOKIE_DOMAIN` = `.360-encompass.com` (optional; ensures auth cookies are sent to both app + api subdomains)
 
@@ -81,18 +81,30 @@ Requirements:
 3. Transition-only fallback (dev only): `FEATURE_SSE_QUERY_TOKEN_COMPAT=true` temporarily allows `?access_token=...` on the SSE URL. Leave this **off** in production.
 
 **Operational Checklist**
-1. Confirm `DATABASE_URL` is set for Alembic, Render, and any local scripts.
+1. Confirm `DATABASE_URL` is set for Alembic, Azure Container Apps, and any local scripts.
 2. Confirm `AUTO_CREATE_TABLES` is not set or is `false`.
 3. Confirm `CORS_ALLOWED_ORIGINS` includes the Vercel domain.
 4. Confirm `/health` returns `{"status":"ok"}` on the deployed API.
 5. Bootstrap the first organization/admin via `POST /api/v1/auth/bootstrap`.
-6. Microsoft delegated OAuth checklist:
+6. Verify frontend `/api -> /api/v1` rewrites against the deployed frontend domain:
+   ```bash
+   cd frontend
+   npm run build
+   FRONTEND_URL="https://360-encompass.com" \
+   FRONTEND_DEPLOY_BRANCH="main" \
+   EXPECTED_COMMIT_SHA="<merged-commit-sha>" \
+   API_BASE_URL="https://api.360-encompass.com" \
+   ACCESS_LOG_PATH="<optional-access-log-path>" \
+   npm run test:api-rewrite:deployment
+   ```
+   This check validates local build rewrites, runtime `/api` behavior (`/api/health`, `/api/v1/health`, `/api`, `/api/v1/v1/health`), deployed SHA resolution via `/api/v1/version` (or `API_BASE_URL/version` fallback), OpenAPI upload schema for `POST /api/v1/revenue/era-pdfs/upload`, optional access-log signals, and hardcoded absolute API callsites in `frontend/src/**`.
+7. Microsoft delegated OAuth checklist:
    - Confirm all Microsoft env vars above are set in API service config.
    - Sign in as an org admin and open `/admin/integrations/microsoft` in the frontend.
    - Click **Connect Microsoft** and complete Microsoft consent.
    - Confirm redirect returns to `/admin/integrations/microsoft?status=connected`.
    - Confirm a row exists in `integration_accounts` for `provider='microsoft'` with `revoked_at` null.
-7. RingCentral OAuth + webhook checklist:
+8. RingCentral OAuth + webhook checklist:
    - Confirm all RingCentral env vars above are set in API service config.
    - In Admin Center, open Integrations status and click **Connect RingCentral**.
    - Complete RingCentral consent and confirm redirect returns with `?connected=1` (or `?connected=0&err=<code>`).
@@ -121,6 +133,77 @@ Login example:
   "organization_id": "<org-id-from-bootstrap>"
 }
 ```
+
+## Incident Response: Production `500` on Login (`POST /api/v1/auth/login`)
+
+### Probable cause ranking (most likely first)
+1. **Alembic revision graph mismatch/cycle** causing schema drift on deployed DB (recent CI shows `FAILED: Cycle is detected in revisions (...)`).
+2. **Missing/renamed column in auth tables** (`users`, `organization_memberships`) after recent migration chain changes.
+3. **`DATABASE_URL` misconfiguration or connectivity failure** (bad scheme, stale creds, network/SSL issues).
+4. **JWT config/runtime issue** (`JWT_SECRET`/`JWT_ALGORITHM` invalid or missing in runtime env).
+5. **Password hashing runtime issue** (`passlib`/`bcrypt` backend mismatch).
+6. **Null/constraint mismatch introduced by migration** on rows read during login path.
+
+### Where to look in code (auth + boot path only)
+- Login route + query flow: `app/api/v1/endpoints/auth.py` (`login` at `@router.post("/auth/login")`).
+- DB session creation: `app/db/session.py` (`get_db`, `SessionLocal`, `_normalize_database_url`).
+- Password verify + JWT creation: `app/core/security.py` (`verify_password`, `create_access_token`).
+- Membership lookup model: `app/db/models/organization_membership.py`.
+- User model fields used on login: `app/db/models/user.py`.
+- App boot/router wiring: `app/create_app.py`, `app/api/v1/router.py`.
+- Migration chain: `alembic/versions/*.py`.
+
+### Azure Container Apps log queries to run (exact search terms)
+- **Migration chain mismatch**
+  - Query: `"Cycle is detected in revisions"`
+  - Query: `"No such revision"` or `"Revision .* is present more than once"`
+  - Confirms via: `alembic.util.messaging`, `CommandError`, migration abort on startup/deploy jobs.
+- **Missing column/table from drift**
+  - Query: `"UndefinedColumn"` / `"column .* does not exist"`
+  - Query: `"UndefinedTable"` / `"relation .* does not exist"`
+  - Confirms via: `sqlalchemy.exc.ProgrammingError`, `psycopg.errors.UndefinedColumn`, `psycopg.errors.UndefinedTable`.
+- **DB URL/config/connectivity**
+  - Query: `"DATABASE_URL must use Postgres"`
+  - Query: `"OperationalError"` / `"could not connect to server"` / `"password authentication failed"`
+  - Confirms via: `RuntimeError` from DB URL normalization, `sqlalchemy.exc.OperationalError`.
+- **JWT/env issues**
+  - Query: `"KeyError: JWT"` / `"JWTError"` / `"Invalid token"`
+  - Query: `"TypeError"` near `jwt.encode`/`create_access_token`
+  - Confirms via: failures in token generation path before response.
+- **Password hashing backend issue**
+  - Query: `"passlib"` / `"bcrypt"` / `"error reading bcrypt version"`
+  - Confirms via: `ValueError`, `AttributeError`, passlib backend exceptions during `verify_password`.
+- **Constraint/null mismatch**
+  - Query: `"IntegrityError"` / `"NotNullViolation"` / `"DataError"`
+  - Confirms via: `sqlalchemy.exc.IntegrityError`, `psycopg.errors.NotNullViolation`.
+
+### Minimal hotfix strategy (incident only)
+- **If migration mismatch/cycle**
+  1. Freeze deploys.
+  2. On prod DB service shell: `alembic current`, `alembic heads`, `alembic history --verbose`.
+  3. Resolve revision DAG in `alembic/versions` (single head, no cycles), redeploy, then `alembic upgrade head`.
+- **If missing env var**
+  1. In Azure Container Apps env vars, verify: `DATABASE_URL`, `JWT_SECRET`, `JWT_ALGORITHM` (optional; defaults to `HS256` in `app/core/security.py`), `ACCESS_TOKEN_EXPIRE_MINUTES`.
+  2. Save + restart service, then re-test `/api/v1/auth/login`.
+- **If null/constraint mismatch**
+  1. Capture exact failing table/column from stack trace.
+  2. Apply minimal forward migration (or emergency SQL patch) to align schema with code.
+  3. Re-run `alembic upgrade head`; verify login.
+- **If DB revision mismatch**
+  1. Compare `alembic_version` value in prod DB vs repository head.
+  2. If DB is behind, apply forward migrations only.
+  3. If DB points to orphan revision, run:
+     - `alembic history --verbose` (identify nearest valid ancestor revision)
+     - `alembic stamp <ancestor_revision>`
+     - `alembic upgrade head`
+
+### Exact next debugging steps
+1. In Azure Container Apps logs, filter by `path="/api/v1/auth/login"` and collect the first traceback for a failing request.
+2. Classify the exception using the queries above (migration, schema drift, env, DB connectivity, JWT, bcrypt).
+3. Validate runtime env values in Azure Container Apps (especially `DATABASE_URL` + `JWT_SECRET`) without rotating unrelated settings.
+4. Check migration state on prod DB (`alembic current/heads/history`) and verify no cycle/duplicate revision IDs.
+5. Execute the corresponding minimal hotfix path, redeploy once, and re-test login with a known valid account.
+6. Confirm `200` login + token issuance; then verify `/api/v1/auth/me` for the same token/org context.
 
 **Tasks API (Phase 1)**
 Routes are mounted under `/api/v1`:

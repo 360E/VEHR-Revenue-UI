@@ -1,0 +1,230 @@
+name: Deploy VEHR Revenue OS (Staging)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: vehr-revos-staging-rg
+  CONTAINERAPP_NAME: vehr-revos-staging-eus2
+  MIGRATION_JOB_NAME: vehr-revos-staging-migrate-eus2
+  ACR_NAME: vehrrevostagingacr
+  ACR_LOGIN_SERVER: vehrrevostagingacr.azurecr.io
+  IMAGE_NAME: vehr-api
+  APP_URL: https://staging.360-encompass.com
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify Azure context
+        run: |
+          set -euxo pipefail
+          az account show
+          az group show -n $RESOURCE_GROUP -o table
+
+      # -----------------------------
+      # Build Image in ACR
+      # -----------------------------
+      - name: Build and push image to ACR
+        run: |
+          set -euxo pipefail
+
+          IMAGE_TAG=${{ github.sha }}
+          FULL_IMAGE=$ACR_LOGIN_SERVER/$IMAGE_NAME:$IMAGE_TAG
+
+          az acr build \
+            --registry $ACR_NAME \
+            --image $IMAGE_NAME:$IMAGE_TAG \
+            .
+
+          echo "FULL_IMAGE=$FULL_IMAGE" >> $GITHUB_ENV
+
+      # -----------------------------
+      # Run migrations via ACA Job
+      # -----------------------------
+      - name: Run migration job and wait
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+
+          ENVIRONMENT_ID="$(az containerapp show \
+            --name "$CONTAINERAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query properties.managedEnvironmentId \
+            -o tsv)"
+
+          if az containerapp job show --name "$MIGRATION_JOB_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+
+            az containerapp job secret set \
+              --name "$MIGRATION_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --secrets "database-url=$DATABASE_URL" >/dev/null
+
+            az containerapp job update \
+              --name "$MIGRATION_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$FULL_IMAGE" \
+              --cpu 0.5 \
+              --memory 1.0Gi \
+              --command alembic \
+              --args upgrade head \
+              --set-env-vars \
+                ENV=staging \
+                DATABASE_URL=secretref:database-url >/dev/null
+
+          else
+
+            az containerapp job create \
+              --name "$MIGRATION_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$ENVIRONMENT_ID" \
+              --trigger-type Manual \
+              --replica-timeout 1800 \
+              --replica-retry-limit 0 \
+              --replica-completion-count 1 \
+              --parallelism 1 \
+              --image "$FULL_IMAGE" \
+              --cpu 0.5 \
+              --memory 1.0Gi \
+              --command alembic \
+              --args upgrade head \
+              --secrets "database-url=$DATABASE_URL" \
+              --env-vars \
+                ENV=staging \
+                DATABASE_URL=secretref:database-url >/dev/null
+          fi
+
+          JOB_EXECUTION_NAME="$(az containerapp job start \
+            --name "$MIGRATION_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query name -o tsv)"
+
+          for i in {1..360}; do
+            STATUS="$(az containerapp job execution show \
+              --name "$MIGRATION_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --job-execution-name "$JOB_EXECUTION_NAME" \
+              --query properties.status \
+              -o tsv)"
+
+            if [ "$STATUS" = "Succeeded" ]; then
+              exit 0
+            fi
+
+            if [ "$STATUS" = "Failed" ]; then
+              exit 1
+            fi
+
+            sleep 5
+          done
+
+          echo "Migration timed out"
+          exit 1
+
+      # -----------------------------
+      # Safe Deploy with Traffic Control
+      # -----------------------------
+      - name: Deploy safely (0% → health → 100%)
+        run: |
+          set -euxo pipefail
+
+          OLD_REVISION="$(az containerapp revision list \
+            --name "$CONTAINERAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "[?properties.active].name | [0]" \
+            -o tsv)"
+
+          az containerapp revision set-mode \
+            --name "$CONTAINERAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --mode multiple
+
+          az containerapp update \
+            --name "$CONTAINERAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$FULL_IMAGE"
+
+          NEW_REVISION="$(az containerapp revision list \
+            --name "$CONTAINERAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "sort_by([].{name:name, created:properties.createdTime}, &created)[-1].name" \
+            -o tsv)"
+
+          rollback() {
+            az containerapp ingress traffic set \
+              --name "$CONTAINERAPP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --revision-weight "$OLD_REVISION=100" "$NEW_REVISION=0" || true
+            exit 1
+          }
+
+          az containerapp ingress traffic set \
+            --name "$CONTAINERAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --revision-weight "$OLD_REVISION=100" "$NEW_REVISION=0"
+
+          for i in {1..36}; do
+            HEALTH="$(az containerapp revision show \
+              --name "$CONTAINERAPP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --revision "$NEW_REVISION" \
+              --query properties.healthState \
+              -o tsv)"
+
+            if [ "$HEALTH" = "Healthy" ]; then
+              break
+            fi
+
+            sleep 5
+
+            if [ "$i" -eq 36 ]; then
+              rollback
+            fi
+          done
+
+          REVISION_FQDN="$(az containerapp revision show \
+            --name "$CONTAINERAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --revision "$NEW_REVISION" \
+            --query properties.fqdn \
+            -o tsv)"
+
+          URL="https://$REVISION_FQDN/api/v1/healthz"
+
+          for i in {1..12}; do
+            if curl -fsS --http1.1 --max-time 20 "$URL" | grep -q '"ok":true'; then
+
+              az containerapp ingress traffic set \
+                --name "$CONTAINERAPP_NAME" \
+                --resource-group "$RESOURCE_GROUP" \
+                --revision-weight "$NEW_REVISION=100" "$OLD_REVISION=0"
+
+              if curl -fsS --http1.1 --max-time 20 "$APP_URL/api/v1/healthz" | grep -q '"ok":true'; then
+                exit 0
+              fi
+
+              rollback
+            fi
+
+            sleep 5
+          done
+
+          rollback

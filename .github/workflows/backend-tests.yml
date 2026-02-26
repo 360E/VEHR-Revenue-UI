@@ -1,0 +1,217 @@
+name: Backend Tests (Postgres)
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: backend-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vehr_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d vehr_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/vehr_test
+      PYTHONPATH: .
+      BOOTSTRAP_ENABLED: "1"
+      ENV: test
+      ENABLE_FAILURE_INJECTION: "true"
+      AZURE_DOCINTEL_ENDPOINT: https://example.invalid
+      AZURE_DOCINTEL_KEY: dummy-key
+      AZURE_OPENAI_ENDPOINT: https://example.invalid
+      AZURE_OPENAI_API_KEY: dummy-key
+      AZURE_OPENAI_DEPLOYMENT: dummy-deployment
+      APP_PORT: "8000"
+      LOAD_TEST_EMAIL: ${{ secrets.LOAD_TEST_EMAIL }}
+      LOAD_TEST_PASSWORD: ${{ secrets.LOAD_TEST_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "psycopg[binary]" pytest alembic
+
+      - name: Wait for Postgres
+        run: |
+          set -euo pipefail
+          for i in {1..30}; do
+            python -c 'import os, psycopg; url=os.environ["DATABASE_URL"].replace("postgresql+psycopg://","postgresql://",1); psycopg.connect(url).close(); print("ok")' && exit 0
+            echo "Postgres not ready yet... ($i/30)"
+            sleep 2
+          done
+          exit 1
+
+      - name: Run Alembic migrations
+        run: |
+          set -euo pipefail
+          alembic upgrade head
+
+      - name: Run tests
+        run: |
+          set -euo pipefail
+          python -m compileall app scripts tests
+          python -m pytest -q
+
+      - name: Run process-mode load validation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_LOG=/tmp/uvicorn-load.log
+          APP_ERR=/tmp/uvicorn-load.err
+
+          on_error() {
+            echo "Load-validation failed. Dumping diagnostics." >&2
+            tail -n 200 "${APP_LOG}" >&2 || true
+            tail -n 200 "${APP_ERR}" >&2 || true
+            alembic current >&2 || true
+            docker ps >&2 || true
+          }
+          trap on_error ERR
+
+          python -m uvicorn app.main:app \
+            --host 0.0.0.0 \
+            --port "${APP_PORT}" \
+            --log-level info \
+            >"${APP_LOG}" 2>"${APP_ERR}" &
+
+          APP_PID=$!
+          trap "kill ${APP_PID} || true" EXIT
+
+          # Wait for health
+          for i in {1..90}; do
+            if curl -fsS "http://127.0.0.1:${APP_PORT}/api/v1/healthz" >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS "http://127.0.0.1:${APP_PORT}/api/v1/readyz" >/dev/null
+
+          # Strip newline garbage from secrets
+          EMAIL="$(printf '%s' "${LOAD_TEST_EMAIL}" | tr -d '\r\n')"
+          PASS="$(printf '%s' "${LOAD_TEST_PASSWORD}" | tr -d '\r\n')"
+
+          # 1) Standalone bootstrap (idempotent)
+          BOOT_URL="http://127.0.0.1:${APP_PORT}/api/v1/bootstrap"
+
+          BOOT_PAYLOAD="$(jq -nc \
+            --arg org "CI Org" \
+            --arg email "$EMAIL" \
+            --arg pass "$PASS" \
+            --arg name "CI Loadtest" \
+            '{organization_name:$org, admin_email:$email, admin_password:$pass, admin_name:$name}')"
+
+          BOOT_TMP=/tmp/bootstrap.json
+          BOOT_CODE="$(curl -sS -o "$BOOT_TMP" -w "%{http_code}" -X POST "$BOOT_URL" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -d "$BOOT_PAYLOAD" || true)"
+
+          if [[ "$BOOT_CODE" -lt 200 || "$BOOT_CODE" -ge 300 ]]; then
+            echo "Standalone bootstrap failed HTTP $BOOT_CODE. Body:" >&2
+            cat "$BOOT_TMP" >&2 || true
+            exit 1
+          fi
+
+          ORG_ID="$(jq -r '.organization_id // empty' < "$BOOT_TMP")"
+
+          if [[ -z "$ORG_ID" ]]; then
+            echo "Bootstrap missing organization_id. Body:" >&2
+            cat "$BOOT_TMP" >&2 || true
+            exit 1
+          fi
+
+          # 2) Login (JSON)
+          LOGIN_URL="http://127.0.0.1:${APP_PORT}/api/v1/auth/login"
+
+          LOGIN_PAYLOAD="$(jq -nc \
+            --arg email "$EMAIL" \
+            --arg password "$PASS" \
+            --arg org "$ORG_ID" \
+            '{email:$email, password:$password, organization_id:$org}')"
+
+          LOGIN_TMP=/tmp/login.json
+          LOGIN_CODE="$(curl -sS -o "$LOGIN_TMP" -w "%{http_code}" -X POST "$LOGIN_URL" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -d "$LOGIN_PAYLOAD" || true)"
+
+          if [[ "$LOGIN_CODE" -lt 200 || "$LOGIN_CODE" -ge 300 ]]; then
+            echo "Login failed HTTP $LOGIN_CODE. Body:" >&2
+            cat "$LOGIN_TMP" >&2 || true
+            exit 1
+          fi
+
+          LOAD_TEST_TOKEN="$(jq -r '.access_token // empty' < "$LOGIN_TMP")"
+          LOAD_TEST_ORGANIZATION_ID="$(jq -r '.organization_id // empty' < "$LOGIN_TMP")"
+
+          if [[ -z "$LOAD_TEST_TOKEN" || -z "$LOAD_TEST_ORGANIZATION_ID" ]]; then
+            echo "Login response missing token/org. Body:" >&2
+            cat "$LOGIN_TMP" >&2 || true
+            exit 1
+          fi
+
+          export LOAD_TEST_TOKEN
+          export LOAD_TEST_ORGANIZATION_ID
+
+          python scripts/load_test.py \
+            --dir tests/fixtures/era \
+            --base-url "http://127.0.0.1:${APP_PORT}" \
+            --mode processes \
+            --workers 20 \
+            --iterations 2 \
+            --job-timeout-seconds 120 \
+            --memory-ceiling-mb 700 \
+            --token "${LOAD_TEST_TOKEN}" \
+            --organization-id "${LOAD_TEST_ORGANIZATION_ID}"
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          set +e
+          echo "== healthz ==" >&2
+          curl -v "http://127.0.0.1:${APP_PORT}/api/v1/healthz" >&2 || true
+          echo "== readyz ==" >&2
+          curl -v "http://127.0.0.1:${APP_PORT}/api/v1/readyz" >&2 || true
+          echo "== app logs ==" >&2
+          tail -n 200 /tmp/uvicorn-load.log >&2 || true
+          tail -n 200 /tmp/uvicorn-load.err >&2 || true
+          echo "== alembic current ==" >&2
+          alembic current >&2 || true
+          echo "== postgres logs ==" >&2
+          docker logs $(docker ps -q --filter ancestor=postgres:16 | head -n 1) >&2 || true
