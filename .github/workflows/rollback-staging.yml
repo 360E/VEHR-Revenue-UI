@@ -1,15 +1,17 @@
-name: Deploy Staging
+name: Rollback Staging
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Image tag to redeploy to staging
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 env:
-  ACR_NAME: vehrrevostagingacr
   ACR_LOGIN_SERVER: vehrrevostagingacr.azurecr.io
   IMAGE_NAME: vehr-revenue-ui
   RESOURCE_GROUP: vehr-revos-staging-rg
@@ -19,57 +21,23 @@ env:
   MAX_HEALTH_ATTEMPTS: "6"
 
 jobs:
-  deploy:
+  rollback:
     runs-on: ubuntu-latest
     environment: staging
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build application
-        run: npm run build
-
-      - name: Compute image reference
-        id: image
-        run: |
-          tag="${GITHUB_SHA::7}"
-          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${tag}"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
-
       - name: Azure login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Obtain ACR access token
-        id: acr-token
+      - name: Compute image reference
+        id: image
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
-          access_token="$(az acr login --name "$ACR_NAME" --expose-token --output tsv --query accessToken)"
-          echo "::add-mask::$access_token"
-          echo "access_token=$access_token" >> "$GITHUB_OUTPUT"
-
-      - name: Log in to ACR with token
-        run: |
-          echo "${{ steps.acr-token.outputs.access_token }}" | docker login "$ACR_LOGIN_SERVER" \
-            --username 00000000-0000-0000-0000-000000000000 \
-            --password-stdin
-
-      - name: Build Docker image
-        run: docker build --tag "${{ steps.image.outputs.image_ref }}" .
-
-      - name: Push Docker image
-        run: docker push "${{ steps.image.outputs.image_ref }}"
+          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}"
+          echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
 
       - name: Deploy container app image
         run: |
@@ -95,7 +63,7 @@ jobs:
           echo "Container app did not reach Succeeded provisioning state in time." >&2
           exit 1
 
-      - name: Run post-deploy health check
+      - name: Run post-rollback health check
         run: |
           response_headers="$(mktemp)"
           trap 'rm -f "$response_headers"' EXIT
@@ -117,5 +85,5 @@ jobs:
           echo "Health check did not return HTTP 200 in time." >&2
           exit 1
 
-      - name: Report deployed image
-        run: 'echo "Deployed image: ${{ steps.image.outputs.image_ref }}"'
+      - name: Report rolled back image
+        run: 'echo "Rolled back image: ${{ steps.image.outputs.image_ref }}"'
