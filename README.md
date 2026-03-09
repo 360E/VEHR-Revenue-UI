@@ -49,6 +49,13 @@ npm run start
 - GitHub Actions workflow `.github/workflows/build-and-push-ui.yml` builds the Docker image on pushes to `main` and on manual dispatch, then authenticates to Azure with OIDC and pushes `vehrrevostagingacr.azurecr.io/vehr-revenue-ui:<short-sha>` when the required Azure secrets are configured.
 - GitHub Actions workflow `.github/workflows/deploy-staging.yml` builds the app, publishes `vehrrevostagingacr.azurecr.io/vehr-revenue-ui:<short-sha>`, updates the staging Azure Container App, and fails if the post-deploy health check is not HTTP 200.
 
+## Control Tower
+
+- Frontend deploy path: GitHub Actions → `Deploy Staging` workflow (`.github/workflows/deploy-staging.yml`) on pushes to `main` or manual dispatch, using the `staging` environment.
+- Rollback path: GitHub Actions → `Rollback Staging` workflow (`.github/workflows/rollback-staging.yml`) with the target `image_tag`, using the same `staging` environment.
+- Required secrets: `AZURE_CREDENTIALS` in the GitHub `staging` environment.
+- No manual Azure portal drift: treat GitHub Actions workflows and repository configuration as the source of truth for staging deploys and rollbacks.
+
 ## Bringing `360-encompass.com` live
 
 To make the site operational in Azure Container Apps:
