@@ -13,9 +13,10 @@ export function getAccessTokenCookieOptions() {
 
 export async function getAccessToken(): Promise<string | null> {
   const cookieStore = await cookies();
-  const accessToken = cookieStore.get(ACCESS_TOKEN_COOKIE_NAME)?.value.trim();
+  const accessToken = cookieStore.get(ACCESS_TOKEN_COOKIE_NAME)?.value;
+  const normalizedAccessToken = accessToken?.trim();
 
-  return accessToken ? accessToken : null;
+  return normalizedAccessToken ? normalizedAccessToken : null;
 }
 
 export function withAccessToken(headersInit: HeadersInit | undefined, accessToken: string | null): Headers {

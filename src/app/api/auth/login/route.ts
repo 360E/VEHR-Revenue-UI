@@ -17,15 +17,24 @@ function getProxyErrorResponse(error: BackendFetchError): Response {
   });
 }
 
-function tryParseJson(value: string): unknown {
+function tryParseJson(value: string): { parsed: boolean; payload: unknown } {
   if (!value.trim()) {
-    return null;
+    return {
+      parsed: true,
+      payload: null,
+    };
   }
 
   try {
-    return JSON.parse(value) as unknown;
+    return {
+      parsed: true,
+      payload: JSON.parse(value) as unknown,
+    };
   } catch {
-    return null;
+    return {
+      parsed: false,
+      payload: null,
+    };
   }
 }
 
@@ -40,12 +49,15 @@ export async function POST(request: Request) {
       headers: contentType ? { "content-type": contentType } : undefined,
     });
     const responseText = await response.text();
-    const accessToken = extractAccessToken(tryParseJson(responseText));
+    const parsedResponse = tryParseJson(responseText);
+    const accessToken = extractAccessToken(parsedResponse.payload);
 
     if (!accessToken) {
       return NextResponse.json(
         {
-          error: "Backend login response did not include an access_token.",
+          error: parsedResponse.parsed
+            ? "Login failed: backend response missing access_token."
+            : "Login failed: backend response was not valid JSON.",
         },
         { status: 502 },
       );
