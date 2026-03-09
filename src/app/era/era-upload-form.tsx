@@ -72,12 +72,14 @@ export function EraUploadForm() {
       <form className="space-y-4" onSubmit={handleSubmit}>
         <div className="space-y-2">
           <label htmlFor="era-file" className="block text-sm font-medium text-zinc-200">
-            ERA file
+            ERA PDF
           </label>
           <input
             id="era-file"
             name="file"
             type="file"
+            accept="application/pdf,.pdf"
+            required
             className="block w-full rounded-md border border-zinc-700 bg-black/50 px-3 py-2 text-zinc-200 file:mr-4 file:rounded-md file:border-0 file:bg-white file:px-3 file:py-2 file:text-sm file:font-medium file:text-black"
           />
         </div>

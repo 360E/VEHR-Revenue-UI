@@ -22,18 +22,48 @@ async function getSameOriginUrl(path: string): Promise<string> {
   return `${protocol}://${host}${normalizedPath}`;
 }
 
-export async function fetchInternalJson<T>(path: string): Promise<T> {
+export type InternalApiResponse = {
+  ok: boolean;
+  status: number;
+  contentType: string;
+  data: unknown;
+  text: string;
+};
+
+export async function fetchInternal(path: string): Promise<InternalApiResponse> {
   const response = await fetch(await getSameOriginUrl(path), {
     cache: "no-store",
   });
-
   const contentType = response.headers.get("content-type") ?? "";
+  const text = await response.text();
 
-  if (!contentType.includes("application/json")) {
+  let data: unknown = null;
+
+  if (contentType.includes("application/json") && text) {
+    try {
+      data = JSON.parse(text) as unknown;
+    } catch {
+      data = null;
+    }
+  }
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    contentType,
+    data,
+    text,
+  };
+}
+
+export async function fetchInternalJson<T>(path: string): Promise<T> {
+  const response = await fetchInternal(path);
+
+  if (!response.contentType.includes("application/json")) {
     throw new Error(`Request to ${path} did not return JSON.`);
   }
 
-  const payload = (await response.json()) as T;
+  const payload = response.data as T;
 
   if (!response.ok) {
     const message =
