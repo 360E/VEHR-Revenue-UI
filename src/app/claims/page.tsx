@@ -1,75 +1,117 @@
 import Link from "next/link";
 
 import { PageShell, SectionCard } from "@/components/page-shell";
-import { fetchInternalJson } from "@/lib/internal-api";
+import { isFetchFailedMessage } from "@/lib/error-messages";
+import { fetchInternal } from "@/lib/internal-api";
 
 export const dynamic = "force-dynamic";
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type JsonRecord = { [key: string]: JsonValue };
 
-function isRecord(value: JsonValue): value is JsonRecord {
+function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function getClaims(payload: JsonValue): JsonRecord[] {
-  if (Array.isArray(payload)) {
-    return payload.filter(isRecord);
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
   }
-
-  if (!isRecord(payload)) {
-    return [];
-  }
-
-  const collectionCandidate = ["claims", "items", "results", "data"]
-    .map((key) => payload[key])
-    .find(Array.isArray);
-
-  return collectionCandidate ? collectionCandidate.filter(isRecord) : [];
 }
 
-async function getClaimsData(): Promise<{ payload: JsonValue | null; error: string | null }> {
+function formatErrorMessage(status: number, payload: unknown, text: string): string {
+  if (typeof payload === "string" && payload.trim()) {
+    return isFetchFailedMessage(payload) ? "Unable to reach the VEHR claims endpoint right now." : payload.trim();
+  }
+
+  if (isRecord(payload)) {
+    const errorMessage = payload.error;
+    const detailMessage = payload.detail;
+    const message = typeof errorMessage === "string" ? errorMessage : detailMessage;
+
+    if (typeof message === "string" && message.trim()) {
+      return isFetchFailedMessage(message) ? "Unable to reach the VEHR claims endpoint right now." : message.trim();
+    }
+  }
+
+  if (text.trim()) {
+    return isFetchFailedMessage(text) ? "Unable to reach the VEHR claims endpoint right now." : text.trim();
+  }
+
+  if (status === 401 || status === 403) {
+    return `Backend authorization failed with status ${status}.`;
+  }
+
+  return `Unable to load claims (status ${status}).`;
+}
+
+async function getClaimsState(): Promise<{ payload: unknown; error: string | null }> {
   try {
+    const response = await fetchInternal("/api/claims");
+
+    if (!response.ok) {
+      return {
+        payload: null,
+        error: formatErrorMessage(response.status, response.data, response.text),
+      };
+    }
+
     return {
-      payload: await fetchInternalJson<JsonValue>("/api/claims"),
+      payload: response.data ?? response.text,
       error: null,
     };
   } catch (error) {
     return {
       payload: null,
-      error: error instanceof Error ? error.message : "Unable to load claims data.",
+      error:
+        error instanceof Error && !isFetchFailedMessage(error.message)
+          ? error.message
+          : "Unable to load claims right now.",
     };
   }
 }
 
-function renderCellValue(value: JsonValue): string {
-  if (Array.isArray(value) || isRecord(value)) {
-    return JSON.stringify(value);
+function getColumns(records: JsonRecord[]): string[] {
+  return Array.from(new Set(records.flatMap((record) => Object.keys(record))));
+}
+
+function renderCellValue(value: unknown): string {
+  if (value === undefined) {
+    return "";
   }
 
-  return value === null ? "null" : String(value);
+  if (Array.isArray(value) || isRecord(value)) {
+    return safeJson(value);
+  }
+
+  return value === null || value === undefined ? "" : String(value);
 }
 
 export default async function ClaimsPage() {
-  const { payload, error } = await getClaimsData();
-  const claims = payload ? getClaims(payload) : [];
-  const columns = Array.from(new Set(claims.flatMap((claim) => Object.keys(claim)))).slice(0, 5);
+  const { payload, error } = await getClaimsState();
+  const arrayPayload = Array.isArray(payload) ? payload : [];
+  const isArrayPayload = Array.isArray(payload);
+  const canRenderRecordTable = isArrayPayload && arrayPayload.every(isRecord);
+  const rows = canRenderRecordTable ? arrayPayload : [];
+  const columns = rows.length > 0 ? getColumns(rows) : [];
 
   return (
     <PageShell
       title="Claims"
-      description="Claims are loaded through the UI's same-origin proxy route."
+      description="Claims data is loaded through the UI's same-origin proxy route."
       footer="Claims data is served from /api/claims via the UI origin."
     >
-      <SectionCard title="Claims workspace">
+      <SectionCard title="Claims data">
         <div className="space-y-6 text-sm text-zinc-300">
           {error ? (
-            <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-amber-200">
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-amber-200">
               {error}
-            </p>
+            </div>
           ) : null}
 
-          {claims.length > 0 && columns.length > 0 ? (
+          {!error && canRenderRecordTable && columns.length > 0 ? (
             <div className="overflow-x-auto rounded-lg border border-zinc-800">
               <table className="min-w-full divide-y divide-zinc-800 text-left">
                 <thead className="bg-black/40 text-xs uppercase tracking-wide text-zinc-500">
@@ -82,11 +124,11 @@ export default async function ClaimsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800 bg-zinc-950/40">
-                  {claims.slice(0, 10).map((claim, index) => (
-                    <tr key={String(claim.claim_id ?? claim.id ?? index)}>
+                  {rows.map((row, index) => (
+                    <tr key={String(row.claim_id ?? row.id ?? index)}>
                       {columns.map((column) => (
                         <td key={column} className="px-4 py-3 align-top text-zinc-200">
-                          {renderCellValue(claim[column])}
+                          {renderCellValue(row[column])}
                         </td>
                       ))}
                     </tr>
@@ -96,12 +138,37 @@ export default async function ClaimsPage() {
             </div>
           ) : null}
 
-          <div className="space-y-3">
-            <p className="text-zinc-400">Backend response</p>
-            <pre className="overflow-x-auto rounded-lg border border-zinc-800 bg-black/50 p-4 text-xs text-zinc-200">
-              {JSON.stringify(payload ?? { error: error ?? "No data returned." }, null, 2)}
-            </pre>
-          </div>
+          {!error && isArrayPayload && arrayPayload.length === 0 ? (
+            <div className="rounded-md border border-zinc-800 bg-black/40 px-4 py-3 text-zinc-300">
+              No claims were returned.
+            </div>
+          ) : null}
+
+          {!error && isArrayPayload && arrayPayload.length > 0 && !canRenderRecordTable ? (
+            <div className="overflow-x-auto rounded-lg border border-zinc-800">
+              <table className="min-w-full divide-y divide-zinc-800 text-left">
+                <thead className="bg-black/40 text-xs uppercase tracking-wide text-zinc-500">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">Value</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800 bg-zinc-950/40">
+                  {arrayPayload.map((value, index) => (
+                    <tr key={index}>
+                      <td className="px-4 py-3 align-top text-zinc-200">{safeJson(value)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          {!error && !isArrayPayload ? (
+            <div className="rounded-md border border-zinc-800 bg-black/40 p-4">
+              <p className="mb-3 text-zinc-300">Claims response</p>
+              <pre className="overflow-x-auto text-xs text-zinc-400">{safeJson(payload ?? null)}</pre>
+            </div>
+          ) : null}
 
           <Link
             href="/"

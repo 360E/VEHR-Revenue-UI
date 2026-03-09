@@ -1,25 +1,23 @@
 import { NextResponse } from "next/server";
 
-import { discoverBackendPath, proxyBackendMultipartPost } from "@/lib/backend";
+import { proxyBackendResponse } from "@/lib/backend";
+import { isFetchFailedMessage } from "@/lib/error-messages";
 
 export const dynamic = "force-dynamic";
 
-const ERA_FALLBACK_PATHS = ["/era/upload", "/era", "/remittance/upload"] as const;
-
 export async function POST(request: Request) {
   try {
-    const backendPath = await discoverBackendPath({
-      method: "post",
-      preferredPaths: ERA_FALLBACK_PATHS,
-      keywords: ["era", "upload", "remittance"],
-      requireMultipart: true,
+    return await proxyBackendResponse("/api/v1/revenue/era-pdfs/upload", {
+      method: "POST",
+      body: await request.formData(),
     });
-
-    return await proxyBackendMultipartPost(backendPath, await request.formData());
   } catch (error) {
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Unable to proxy ERA upload.",
+        error:
+          error instanceof Error && !isFetchFailedMessage(error.message)
+            ? error.message
+            : "Unable to reach the VEHR ERA upload endpoint.",
       },
       { status: 502 },
     );
