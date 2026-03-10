@@ -25,7 +25,7 @@ export const revenueSnapshotResponseSchema = z
 export const revenueSnapshotMissingSchema = z
   .object({
     error: z.literal("snapshot_not_found"),
-    detail: z.string().optional(),
+    detail: jsonValueSchema.optional(),
     message: z.string().optional(),
   })
   .passthrough();
@@ -33,7 +33,7 @@ export const revenueSnapshotMissingSchema = z
 export const apiErrorResponseSchema = z
   .object({
     error: z.string().min(1),
-    detail: z.string().optional(),
+    detail: jsonValueSchema.optional(),
     message: z.string().optional(),
   })
   .passthrough();
