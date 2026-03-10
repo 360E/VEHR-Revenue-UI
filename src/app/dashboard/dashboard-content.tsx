@@ -77,13 +77,14 @@ function DashboardSkeleton() {
   );
 }
 
-function SnapshotMissingState({ detail }: { detail: RevenueSnapshotMissing }) {
+function SnapshotMissingState({ missingInfo }: { missingInfo: RevenueSnapshotMissing }) {
   return (
     <div className="space-y-6 text-sm text-zinc-300">
       <div className="rounded-md border border-sky-500/40 bg-sky-500/10 px-4 py-3 text-sky-100">
         <p className="font-semibold text-white">Snapshot generating</p>
         <p className="mt-2">
-          {detail.detail?.trim() || "The latest revenue snapshot is still being generated. We'll retry automatically every 30 seconds."}
+          {missingInfo.detail?.trim() ||
+            "The latest revenue snapshot is still being generated. We'll retry automatically every 30 seconds."}
         </p>
       </div>
       <BackHomeLink />
@@ -179,7 +180,7 @@ function renderDashboardState(state: DashboardState, onRetry: () => void): React
     case "loading":
       return <DashboardSkeleton />;
     case "snapshot_missing":
-      return <SnapshotMissingState detail={state.detail} />;
+      return <SnapshotMissingState missingInfo={state.detail} />;
     case "ready":
       return <DashboardReadyState snapshot={state.snapshot} />;
     case "unauthorized":
