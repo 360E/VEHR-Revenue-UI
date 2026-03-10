@@ -47,6 +47,9 @@ const RECOVERABLE_RETRY_POLICY: DashboardRetryPolicy = {
   maxAttempts: DASHBOARD_RECOVERABLE_RETRY_LIMIT,
 };
 
+const PENDING_GENERATION_HINTS = ["generating", "generation", "building", "preparing", "retry", "recovering", "pending"];
+const UNAUTHORIZED_HINTS = ["invalid token", "invalid_token", "unauthorized", "forbidden", "session expired"];
+
 function normalizeErrorMessage(message: string, fallback: string): string {
   const trimmedMessage = message.trim();
 
@@ -149,9 +152,7 @@ function hasPendingGenerationHint(problem: DashboardProblem): boolean {
     .join(" ")
     .toLowerCase();
 
-  return ["generating", "generation", "building", "preparing", "retry", "recovering", "pending"].some((hint) =>
-    combinedText.includes(hint),
-  );
+  return PENDING_GENERATION_HINTS.some((hint) => combinedText.includes(hint));
 }
 
 function isUnauthorizedProblem(problem: DashboardProblem, status: number): status is 401 | 403 {
@@ -164,9 +165,7 @@ function isUnauthorizedProblem(problem: DashboardProblem, status: number): statu
     .join(" ")
     .toLowerCase();
 
-  return ["invalid token", "invalid_token", "unauthorized", "forbidden", "session expired"].some((hint) =>
-    combinedText.includes(hint),
-  );
+  return UNAUTHORIZED_HINTS.some((hint) => combinedText.includes(hint));
 }
 
 function isRecoverableStatus(status: number): boolean {
