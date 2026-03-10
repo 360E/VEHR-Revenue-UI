@@ -1,25 +1,13 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import useSWR from "swr";
 
 import { SectionCard } from "@/components/page-shell";
-import {
-  fetchLatestRevenueSnapshotState,
-  SNAPSHOT_MISSING_REFRESH_INTERVAL_MS,
-  type DashboardState,
-} from "@/lib/api/revenue";
-import {
-  assertSnapshotExists,
-  safeSnapshotAccess,
-  type JsonRecord,
-  type JsonValue,
-  type RevenueSnapshotMissing,
-  type RevenueSnapshotResponse,
-} from "@/lib/api/types";
+import { fetchLatestRevenueSnapshotState, type DashboardState } from "@/lib/api/revenue";
+import { safeSnapshotAccess, type JsonRecord, type JsonValue, type RevenueSnapshotResponse } from "@/lib/api/types";
 
 const DASHBOARD_FIELDS: Array<keyof RevenueSnapshotResponse> = [
   "snapshot_id",
@@ -44,6 +32,18 @@ function safeJson(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function formatFieldLabel(field: string): string {
+  return field
+    .split("_")
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function formatRetryInterval(intervalMs: number): string {
+  const seconds = Math.round(intervalMs / 1000);
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
 }
 
 function renderFieldValue(value: JsonValue): ReactNode {
@@ -77,58 +77,17 @@ function DashboardSkeleton() {
   );
 }
 
-function SnapshotMissingState({ missingInfo }: { missingInfo: RevenueSnapshotMissing }) {
-  return (
-    <div className="space-y-6 text-sm text-zinc-300">
-      <div className="rounded-md border border-sky-500/40 bg-sky-500/10 px-4 py-3 text-sky-100">
-        <p className="font-semibold text-white">Snapshot generating</p>
-        <p className="mt-2">
-          {missingInfo.detail?.trim() ||
-            "The latest revenue snapshot is still being generated. We'll retry automatically every 30 seconds."}
-        </p>
-      </div>
-      <BackHomeLink />
-    </div>
-  );
-}
+type DashboardStatusTone = "info" | "warning" | "error";
 
-function DashboardErrorState({
-  error,
-  onRetry,
-}: {
-  error: string;
-  onRetry: () => void;
-}) {
-  return (
-    <div className="space-y-6 text-sm text-zinc-300">
-      <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-amber-200">
-        <p className="font-semibold text-white">Dashboard unavailable</p>
-        <p className="mt-2">{error}</p>
-      </div>
-      <div className="flex flex-wrap gap-3">
-        <button
-          type="button"
-          onClick={onRetry}
-          className="rounded-md border border-zinc-700 px-4 py-2 text-white transition hover:border-white"
-        >
-          Retry
-        </button>
-        <BackHomeLink />
-      </div>
-    </div>
-  );
-}
-
-function UnauthorizedState({ error }: { error: string }) {
-  return (
-    <div className="space-y-6 text-sm text-zinc-300">
-      <div className="rounded-md border border-zinc-700 bg-black/40 px-4 py-3">
-        <p className="font-semibold text-white">Session expired</p>
-        <p className="mt-2">{error}</p>
-      </div>
-      <BackHomeLink />
-    </div>
-  );
+function getToneClasses(tone: DashboardStatusTone): string {
+  switch (tone) {
+    case "info":
+      return "border-sky-500/40 bg-sky-500/10 text-sky-100";
+    case "warning":
+      return "border-amber-500/40 bg-amber-500/10 text-amber-100";
+    case "error":
+      return "border-rose-500/40 bg-rose-500/10 text-rose-100";
+  }
 }
 
 function BackHomeLink() {
@@ -139,33 +98,229 @@ function BackHomeLink() {
   );
 }
 
-function DashboardReadyState({ snapshot }: { snapshot: RevenueSnapshotResponse }) {
-  assertSnapshotExists(snapshot);
+function StatusDetail({ detail }: { detail?: string }) {
+  if (!detail) {
+    return null;
+  }
 
+  return (
+    <div className="rounded-md border border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-200">
+      <p className="font-medium uppercase tracking-wide text-zinc-400">Details</p>
+      <p className="mt-2 whitespace-pre-wrap break-words">{detail}</p>
+    </div>
+  );
+}
+
+function DashboardStatusPanel({
+  tone,
+  title,
+  message,
+  detail,
+  actions,
+  guidance,
+}: {
+  tone: DashboardStatusTone;
+  title: string;
+  message: string;
+  detail?: string;
+  actions?: ReactNode;
+  guidance?: ReactNode;
+}) {
+  return (
+    <div className="space-y-6 text-sm text-zinc-300">
+      <div className={`space-y-3 rounded-md border px-4 py-3 ${getToneClasses(tone)}`}>
+        <div>
+          <p className="font-semibold text-white">{title}</p>
+          <p className="mt-2 text-sm leading-6">{message}</p>
+        </div>
+        <StatusDetail detail={detail} />
+        {guidance ? <div className="text-xs text-zinc-200">{guidance}</div> : null}
+      </div>
+      {actions ? <div className="flex flex-wrap gap-3">{actions}</div> : null}
+    </div>
+  );
+}
+
+function SnapshotPendingState({
+  message,
+  detail,
+  retryIntervalMs,
+  retriesRemaining,
+  onRetry,
+}: {
+  message: string;
+  detail?: string;
+  retryIntervalMs: number;
+  retriesRemaining: number;
+  onRetry: () => void;
+}) {
+  return (
+    <DashboardStatusPanel
+      tone="info"
+      title="Generating first snapshot"
+      message={message}
+      detail={detail}
+      guidance={
+        retriesRemaining > 0
+          ? `The dashboard will check again automatically in ${formatRetryInterval(retryIntervalMs)}.`
+          : "Automatic checks are paused for now. Use “Check again now” after the backend finishes recovering."
+      }
+      actions={
+        <>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-md border border-zinc-700 px-4 py-2 text-white transition hover:border-white"
+          >
+            Check again now
+          </button>
+          <BackHomeLink />
+        </>
+      }
+    />
+  );
+}
+
+function RecoverableDashboardState({
+  message,
+  detail,
+  retryIntervalMs,
+  retriesRemaining,
+  onRetry,
+}: {
+  message: string;
+  detail?: string;
+  retryIntervalMs: number;
+  retriesRemaining: number;
+  onRetry: () => void;
+}) {
+  return (
+    <DashboardStatusPanel
+      tone="warning"
+      title="Snapshot temporarily unavailable"
+      message={message}
+      detail={detail}
+      guidance={
+        retriesRemaining > 0
+          ? `The UI will retry automatically in ${formatRetryInterval(retryIntervalMs)} while the backend catches up.`
+          : "Automatic retries are paused to avoid hammering the backend. Use “Retry” when you're ready."
+      }
+      actions={
+        <>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-md border border-zinc-700 px-4 py-2 text-white transition hover:border-white"
+          >
+            Retry
+          </button>
+          <BackHomeLink />
+        </>
+      }
+    />
+  );
+}
+
+function BackendFailureState({
+  message,
+  detail,
+  onRetry,
+}: {
+  message: string;
+  detail?: string;
+  onRetry: () => void;
+}) {
+  return (
+    <DashboardStatusPanel
+      tone="error"
+      title="Revenue snapshot failed"
+      message={message}
+      detail={detail}
+      guidance="Retry after the backend error is addressed, or refresh once recovery is complete."
+      actions={
+        <>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-md border border-zinc-700 px-4 py-2 text-white transition hover:border-white"
+          >
+            Retry
+          </button>
+          <BackHomeLink />
+        </>
+      }
+    />
+  );
+}
+
+function FatalDashboardState({
+  message,
+  detail,
+  onRetry,
+}: {
+  message: string;
+  detail?: string;
+  onRetry: () => void;
+}) {
+  return (
+    <DashboardStatusPanel
+      tone="error"
+      title="Unexpected dashboard response"
+      message={message}
+      detail={detail}
+      guidance="The frontend received data it could not safely render. Retry once the response contract is corrected."
+      actions={
+        <>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-md border border-zinc-700 px-4 py-2 text-white transition hover:border-white"
+          >
+            Retry
+          </button>
+          <BackHomeLink />
+        </>
+      }
+    />
+  );
+}
+
+function UnauthorizedState({ message, detail }: { message: string; detail?: string }) {
+  return (
+    <DashboardStatusPanel
+      tone="warning"
+      title="Session expired"
+      message={message}
+      detail={detail}
+      guidance="Sign in again to refresh your session before returning to the dashboard."
+      actions={
+        <>
+          <Link
+            href="/login"
+            className="inline-flex rounded-md border border-white px-4 py-2 font-medium text-white transition hover:bg-white hover:text-black"
+          >
+            Go to sign in
+          </Link>
+          <BackHomeLink />
+        </>
+      }
+    />
+  );
+}
+
+function DashboardReadyState({ snapshot }: { snapshot: RevenueSnapshotResponse }) {
   const fields = DASHBOARD_FIELDS.flatMap((field) => {
     const value = safeSnapshotAccess(snapshot, field);
 
     return value === null ? [] : ([[field, value]] as const);
   });
 
-  if (fields.length === 0) {
-    return (
-      <div className="space-y-6 text-sm text-zinc-300">
-        <div className="rounded-md border border-zinc-800 bg-black/40 p-4">
-          <p className="mb-3 text-zinc-300">No dashboard fields were returned.</p>
-          <pre className="overflow-x-auto text-xs text-zinc-400">{safeJson(snapshot)}</pre>
-        </div>
-        <BackHomeLink />
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6 text-sm text-zinc-300">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {fields.map(([field, value]) => (
           <div key={field} className="rounded-lg border border-zinc-800 bg-black/40 p-4">
-            <p className="text-xs uppercase tracking-wide text-zinc-500">{field}</p>
+            <p className="text-xs uppercase tracking-wide text-zinc-500">{formatFieldLabel(field)}</p>
             {renderFieldValue(value)}
           </div>
         ))}
@@ -175,48 +330,98 @@ function DashboardReadyState({ snapshot }: { snapshot: RevenueSnapshotResponse }
   );
 }
 
-function renderDashboardState(state: DashboardState, onRetry: () => void): ReactNode {
+function renderDashboardState(
+  state: DashboardState,
+  autoRetryCount: number,
+  onRetry: () => void,
+): ReactNode {
   switch (state.status) {
     case "loading":
       return <DashboardSkeleton />;
-    case "snapshot_missing":
-      return <SnapshotMissingState missingInfo={state.detail} />;
+    case "pending":
+      return (
+        <SnapshotPendingState
+          message={state.message}
+          detail={state.detail}
+          retryIntervalMs={state.retryPolicy.intervalMs}
+          retriesRemaining={Math.max(state.retryPolicy.maxAttempts - autoRetryCount, 0)}
+          onRetry={onRetry}
+        />
+      );
+    case "recoverable":
+      return (
+        <RecoverableDashboardState
+          message={state.message}
+          detail={state.detail}
+          retryIntervalMs={state.retryPolicy.intervalMs}
+          retriesRemaining={Math.max(state.retryPolicy.maxAttempts - autoRetryCount, 0)}
+          onRetry={onRetry}
+        />
+      );
     case "ready":
       return <DashboardReadyState snapshot={state.snapshot} />;
     case "unauthorized":
-      return <UnauthorizedState error={state.error} />;
-    case "error":
-      return <DashboardErrorState error={state.error} onRetry={onRetry} />;
+      return <UnauthorizedState message={state.message} detail={state.detail} />;
+    case "backend_failure":
+      return <BackendFailureState message={state.message} detail={state.detail} onRetry={onRetry} />;
+    case "fatal":
+      return <FatalDashboardState message={state.message} detail={state.detail} onRetry={onRetry} />;
     default:
-      return <DashboardErrorState error="Unable to determine the current dashboard state." onRetry={onRetry} />;
+      return (
+        <FatalDashboardState
+          message="Unable to determine the current dashboard state."
+          onRetry={onRetry}
+        />
+      );
   }
 }
 
 export function DashboardContent() {
-  const router = useRouter();
+  const [autoRetryState, setAutoRetryState] = useState<{ key: string; count: number }>({
+    key: "idle",
+    count: 0,
+  });
   const { data, isLoading, mutate } = useSWR("latest-revenue-snapshot", fetchLatestRevenueSnapshotState, {
-    refreshInterval: (state) =>
-      state?.status === "snapshot_missing" ? SNAPSHOT_MISSING_REFRESH_INTERVAL_MS : 0,
     revalidateOnFocus: false,
     shouldRetryOnError: false,
   });
   const state: DashboardState = isLoading && !data ? { status: "loading" } : (data ?? { status: "loading" });
+  const autoRetryKey =
+    state.status === "pending" || state.status === "recoverable"
+      ? `${state.status}:${state.message}:${state.detail ?? ""}`
+      : "idle";
+  const autoRetryCount = autoRetryState.key === autoRetryKey ? autoRetryState.count : 0;
+  const autoRetryIntervalMs =
+    state.status === "pending" || state.status === "recoverable" ? state.retryPolicy.intervalMs : null;
+  const autoRetryLimit = state.status === "pending" || state.status === "recoverable" ? state.retryPolicy.maxAttempts : 0;
 
   useEffect(() => {
-    if (state.status !== "unauthorized") {
+    if (state.status !== "pending" && state.status !== "recoverable") {
+      return;
+    }
+
+    if (autoRetryIntervalMs === null || autoRetryCount >= autoRetryLimit) {
       return;
     }
 
     const timeoutId = window.setTimeout(() => {
-      router.replace("/login");
-    }, 0);
+      setAutoRetryState((currentState) => ({
+        key: autoRetryKey,
+        count: currentState.key === autoRetryKey ? currentState.count + 1 : 1,
+      }));
+      void mutate();
+    }, autoRetryIntervalMs);
 
     return () => window.clearTimeout(timeoutId);
-  }, [router, state.status]);
+  }, [autoRetryCount, autoRetryIntervalMs, autoRetryKey, autoRetryLimit, mutate, state.status]);
 
   return (
     <SectionCard title="Revenue snapshot">
-      {renderDashboardState(state, () => {
+      {renderDashboardState(state, autoRetryCount, () => {
+        setAutoRetryState({
+          key: autoRetryKey,
+          count: 0,
+        });
         void mutate();
       })}
     </SectionCard>
