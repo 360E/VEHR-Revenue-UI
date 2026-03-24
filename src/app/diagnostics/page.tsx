@@ -33,6 +33,38 @@ export default async function DiagnosticsPage() {
         <DiagnosticsPanel />
       </SectionCard>
 
+      <SectionCard title="Operator runbook">
+        <div className="space-y-4 text-sm text-zinc-300">
+          <p>
+            Use this page as the live source of truth, then follow the permanent MCP operator runbook in the VEHR repo
+            when a connector flips red or staging behaves unexpectedly.
+          </p>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-xl border border-zinc-800 bg-black/30 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Runbook location</p>
+              <p className="mt-2 break-all font-mono text-white">docs/mcp-operator-runbook.md</p>
+              <a
+                href="https://github.com/360E/VEHR/blob/main/docs/mcp-operator-runbook.md"
+                target="_blank"
+                rel="noreferrer"
+                className="mt-4 inline-flex rounded-md border border-zinc-700 px-4 py-2 text-white transition hover:border-white"
+              >
+                Open runbook
+              </a>
+            </div>
+
+            <div className="rounded-xl border border-zinc-800 bg-black/30 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Healthy runtime contract</p>
+              <ul className="mt-2 space-y-2 text-zinc-300">
+                <li>Postgres: valid `DATABASE_URL` and network reachability.</li>
+                <li>GitHub: `GITHUB_REPO` plus a credential that can read `360E/VEHR`.</li>
+                <li>Azure: `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, and Reader access on staging resources.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </SectionCard>
+
       <div>
         <Link
           href="/"
