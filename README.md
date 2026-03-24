@@ -10,14 +10,11 @@ Create `.env.local` from `.env.example` (or configure Azure Container App enviro
 NEXT_PUBLIC_API_URL=https://api-staging.360-encompass.com
 # Optional internal override for server-side requests only.
 BACKEND_INTERNAL_URL=https://api-staging.360-encompass.com
-# Optional: enables Builder-powered routes under /builder.
-NEXT_PUBLIC_BUILDER_API_KEY=your_builder_public_api_key
 ```
 
 - `NEXT_PUBLIC_API_URL` is the preferred public backend origin for the server-side proxy routes.
 - `BACKEND_INTERNAL_URL` is optional and overrides server-side requests when an internal network URL is available.
 - Legacy fallback vars `NEXT_PUBLIC_API_BASE_URL` and `NEXT_PUBLIC_BACKEND_URL` are still supported for compatibility.
-- `NEXT_PUBLIC_BUILDER_API_KEY` enables the dedicated Builder route at `/builder`.
 
 ## Local development
 
@@ -27,13 +24,6 @@ npm run dev
 ```
 
 Then open `http://localhost:3000`.
-
-To work with Builder.io locally:
-
-1. Set `NEXT_PUBLIC_BUILDER_API_KEY` in `.env.local`.
-2. Start the app with `npm run dev`.
-3. In Builder, set the Page model Preview URL to `http://localhost:3000/builder`.
-4. Open `http://localhost:3000/builder` or any nested Builder page path such as `http://localhost:3000/builder/pricing`.
 
 ## Build
 
@@ -49,7 +39,6 @@ npm run start
 - The App Router lives under `src/app`.
 - `/login` renders the sign-in form and posts to `/api/auth/login`.
 - `/dashboard`, `/era`, and `/claims` fetch real backend data through same-origin App Router API routes and show a sign-in-required state when auth is missing.
-- `/builder` renders Builder-managed pages when `NEXT_PUBLIC_BUILDER_API_KEY` is configured.
 - `/api/health`, `/api/dashboard`, `/api/claims`, `/api/era`, and `/api/auth/*` proxy requests to the configured backend origin.
 
 ## Framework conventions
