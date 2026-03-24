@@ -15,6 +15,34 @@ type EraFileResponse = {
   created_at: string;
 };
 
+type EraWorkItem = {
+  id: string;
+  type: string;
+  payer_name: string;
+  claim_ref: string;
+  dollars_cents: number;
+  status: string;
+  created_at: string;
+};
+
+type EraReportResponse = {
+  era_file_id: string;
+  claim_count: number;
+  line_count: number;
+  work_item_count: number;
+  total_paid_cents: number;
+  total_adjustment_cents: number;
+  total_patient_resp_cents: number;
+  net_cents: number;
+  reconciled: boolean;
+  declared_total_missing: boolean;
+  phi_scan_passed: boolean;
+  phi_hit_count: number;
+  finalized: boolean;
+  created_at: string;
+  top_work_items: EraWorkItem[];
+};
+
 type ProcessErrorResponse = {
   detail?: string | { error_code?: string; current_status?: string; era_file_id?: string };
   error?: string;
@@ -28,8 +56,9 @@ type UploadState = {
   message: string | null;
   uploadedFile: EraFileResponse | null;
   processedFile: EraFileResponse | null;
+  report: EraReportResponse | null;
   processError: string | null;
-  payload: EraFileResponse | EraFileResponse[] | ProcessErrorResponse | null;
+  payload: EraFileResponse | EraFileResponse[] | ProcessErrorResponse | EraReportResponse | null;
 };
 
 const INITIAL_STATE: UploadState = {
@@ -37,9 +66,17 @@ const INITIAL_STATE: UploadState = {
   message: null,
   uploadedFile: null,
   processedFile: null,
+  report: null,
   processError: null,
   payload: null,
 };
+
+function formatCents(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(value / 100);
+}
 
 function getStatusTone(status: string): string {
   switch (status) {
@@ -132,6 +169,113 @@ function ResultCard({
   );
 }
 
+function ReviewCard({ report }: { report: EraReportResponse }) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-black/40 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Results review</p>
+          <h3 className="text-base font-semibold text-white">Processed ERA summary</h3>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span
+            className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
+              report.finalized
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+            }`}
+          >
+            {report.finalized ? "Finalized" : "Needs review"}
+          </span>
+          <span
+            className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
+              report.reconciled
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+            }`}
+          >
+            {report.reconciled ? "Reconciled" : "Not reconciled"}
+          </span>
+        </div>
+      </div>
+
+      <dl className="mt-4 grid gap-3 text-sm text-zinc-300 md:grid-cols-4">
+        <div>
+          <dt className="text-zinc-500">Claims</dt>
+          <dd className="text-white">{report.claim_count}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Claim lines</dt>
+          <dd className="text-white">{report.line_count}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Work items</dt>
+          <dd className="text-white">{report.work_item_count}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Created</dt>
+          <dd className="text-white">{new Date(report.created_at).toLocaleString()}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Paid</dt>
+          <dd className="text-white">{formatCents(report.total_paid_cents)}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Adjustments</dt>
+          <dd className="text-white">{formatCents(report.total_adjustment_cents)}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Patient responsibility</dt>
+          <dd className="text-white">{formatCents(report.total_patient_resp_cents)}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Net</dt>
+          <dd className="text-white">{formatCents(report.net_cents)}</dd>
+        </div>
+      </dl>
+
+      <div className="mt-4 flex flex-wrap gap-2 text-xs text-zinc-300">
+        <span className="rounded-full border border-zinc-700 px-3 py-1">
+          PHI scan: {report.phi_scan_passed ? "passed" : "attention needed"}
+        </span>
+        <span className="rounded-full border border-zinc-700 px-3 py-1">
+          Declared totals: {report.declared_total_missing ? "missing" : "present"}
+        </span>
+      </div>
+
+      {report.top_work_items.length > 0 ? (
+        <div className="mt-6 space-y-3">
+          <h4 className="text-sm font-semibold text-white">Top work items</h4>
+          <div className="overflow-x-auto rounded-lg border border-zinc-800">
+            <table className="min-w-full divide-y divide-zinc-800 text-left text-sm">
+              <thead className="bg-black/40 text-xs uppercase tracking-wide text-zinc-500">
+                <tr>
+                  <th className="px-4 py-3 font-medium">Claim</th>
+                  <th className="px-4 py-3 font-medium">Type</th>
+                  <th className="px-4 py-3 font-medium">Payer</th>
+                  <th className="px-4 py-3 font-medium">Amount</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-800 bg-zinc-950/40 text-zinc-200">
+                {report.top_work_items.map((item) => (
+                  <tr key={item.id}>
+                    <td className="px-4 py-3 align-top text-white">{item.claim_ref}</td>
+                    <td className="px-4 py-3 align-top">{item.type}</td>
+                    <td className="px-4 py-3 align-top">{item.payer_name}</td>
+                    <td className="px-4 py-3 align-top">{formatCents(item.dollars_cents)}</td>
+                    <td className="px-4 py-3 align-top">{item.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function EraUploadForm() {
   const [state, setState] = useState<UploadState>(INITIAL_STATE);
 
@@ -148,6 +292,7 @@ export function EraUploadForm() {
         message: "Select an ERA file before submitting.",
         uploadedFile: null,
         processedFile: null,
+        report: null,
         processError: null,
         payload: null,
       });
@@ -159,6 +304,7 @@ export function EraUploadForm() {
       message: "Uploading and processing ERA file...",
       uploadedFile: null,
       processedFile: null,
+      report: null,
       processError: null,
       payload: null,
     });
@@ -176,6 +322,7 @@ export function EraUploadForm() {
           message: `Upload failed with status ${uploadResponse.status}.`,
           uploadedFile: null,
           processedFile: null,
+          report: null,
           processError: null,
           payload: uploadPayload,
         });
@@ -189,6 +336,7 @@ export function EraUploadForm() {
           message: "Upload succeeded but no ERA file was returned.",
           uploadedFile: null,
           processedFile: null,
+          report: null,
           processError: null,
           payload: uploadPayload,
         });
@@ -199,6 +347,14 @@ export function EraUploadForm() {
         method: "POST",
       });
       const processPayload = (await processResponse.json()) as EraFileResponse | ProcessErrorResponse;
+      let report: EraReportResponse | null = null;
+
+      if (processResponse.ok) {
+        const reportResponse = await fetch(`/api/era/${uploadedFile.id}/report`);
+        if (reportResponse.ok) {
+          report = (await reportResponse.json()) as EraReportResponse;
+        }
+      }
 
       setState({
         status: processResponse.ok ? "success" : "error",
@@ -207,8 +363,9 @@ export function EraUploadForm() {
           : "Upload completed, but processing needs attention.",
         uploadedFile,
         processedFile: processResponse.ok ? (processPayload as EraFileResponse) : null,
+        report,
         processError: processResponse.ok ? null : formatProcessError(processPayload as ProcessErrorResponse, processResponse.status),
-        payload: processPayload,
+        payload: report ?? processPayload,
       });
 
       form.reset();
@@ -221,6 +378,7 @@ export function EraUploadForm() {
             : "Unable to submit the ERA upload right now.",
         uploadedFile: null,
         processedFile: null,
+        report: null,
         processError: null,
         payload: null,
       });
@@ -268,6 +426,8 @@ export function EraUploadForm() {
       {state.uploadedFile ? <ResultCard label="Upload result" file={state.uploadedFile} /> : null}
 
       {state.processedFile ? <ResultCard label="Processing result" file={state.processedFile} /> : null}
+
+      {state.report ? <ReviewCard report={state.report} /> : null}
 
       {state.processError ? (
         <div className="rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-rose-200">
