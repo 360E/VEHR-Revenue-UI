@@ -6,6 +6,14 @@ export type BackendRuntimeConfig = {
   validationMessage: string | null;
 };
 
+function getPublicBackendUrl(): string | null {
+  return (
+    normalizeUrl(process.env.NEXT_PUBLIC_API_URL) ??
+    normalizeUrl(process.env.NEXT_PUBLIC_API_BASE_URL) ??
+    normalizeUrl(process.env.NEXT_PUBLIC_BACKEND_URL)
+  );
+}
+
 function normalizeUrl(value: string | undefined): string | null {
   if (!value) {
     return null;
@@ -32,7 +40,7 @@ function isAbsoluteUrl(value: string): boolean {
 
 export function getBackendRuntimeConfig(): BackendRuntimeConfig {
   const internalUrl = normalizeUrl(process.env.BACKEND_INTERNAL_URL);
-  const publicUrl = normalizeUrl(process.env.NEXT_PUBLIC_BACKEND_URL);
+  const publicUrl = getPublicBackendUrl();
 
   const baseUrl = internalUrl ?? publicUrl;
   const source: BackendConfigSource = internalUrl ? "internal" : publicUrl ? "public" : "none";
@@ -42,7 +50,7 @@ export function getBackendRuntimeConfig(): BackendRuntimeConfig {
       baseUrl: null,
       source,
       validationMessage:
-        "Backend URL is not configured. Set NEXT_PUBLIC_BACKEND_URL (and optionally BACKEND_INTERNAL_URL).",
+        "Backend URL is not configured. Set NEXT_PUBLIC_API_URL (preferred), NEXT_PUBLIC_API_BASE_URL, or NEXT_PUBLIC_BACKEND_URL, and optionally BACKEND_INTERNAL_URL.",
     };
   }
 

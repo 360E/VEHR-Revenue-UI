@@ -1,23 +1,16 @@
+import { getBackendRuntimeConfig } from "@/lib/env";
+
 const DEFAULT_ACCEPT_HEADER = "application/json";
 const ERROR_TEXT_LIMIT = 500;
 
-function normalizeBaseUrl(value: string | undefined): string | null {
-  const trimmedValue = value?.trim();
-
-  if (!trimmedValue) {
-    return null;
-  }
-
-  return trimmedValue.endsWith("/") ? trimmedValue.slice(0, -1) : trimmedValue;
-}
-
 export function getBackendBaseUrl(): string {
-  const baseUrl =
-    normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL) ??
-    normalizeBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
+  const { baseUrl, validationMessage } = getBackendRuntimeConfig();
 
   if (!baseUrl) {
-    throw new Error("Backend URL is not configured. Set NEXT_PUBLIC_API_URL or NEXT_PUBLIC_API_BASE_URL.");
+    throw new Error(
+      validationMessage ??
+        "Backend URL is not configured. Set NEXT_PUBLIC_API_URL (preferred), NEXT_PUBLIC_API_BASE_URL, or NEXT_PUBLIC_BACKEND_URL.",
+    );
   }
 
   return baseUrl;
