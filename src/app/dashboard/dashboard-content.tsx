@@ -38,6 +38,8 @@ function buildWorklistRequest(searchParamString: string): Record<string, string 
   const sortDirection = params.get("sort_direction");
   const status = params.get("status");
   const priority = params.get("priority");
+  const type = params.get("type");
+  const search = params.get("search");
 
   return {
     page: parsePositiveInteger(params.get("page"), 1),
@@ -46,6 +48,8 @@ function buildWorklistRequest(searchParamString: string): Record<string, string 
     sort_direction: sortDirection && WORKLIST_DIRECTION_VALUES.has(sortDirection) ? sortDirection : "desc",
     status: status && status !== "All statuses" ? status : null,
     priority: priority && priority !== "All priorities" ? priority : null,
+    type: type && type !== "All types" ? type : null,
+    search: search?.trim() ? search.trim() : null,
   };
 }
 
@@ -360,6 +364,7 @@ export function DashboardContent() {
     return {
       items: buildRevenueQueueItems(worklistPage),
       metrics: buildInsightMetrics(state.status === "ready" ? state.snapshot : null, worklistPage),
+      typeOptions: Object.keys(worklistPage.summary.type_counts ?? {}).sort(),
       totalItems: worklistPage.total,
       currentPage: worklistPage.page,
       pageSize: worklistPage.page_size,

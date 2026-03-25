@@ -292,8 +292,7 @@ function FilterBar(props: {
       </div>
 
       <p className="text-sm text-slate-400">
-        Status, priority, sorting, and pagination query the backend worklist API. Search and type narrow the loaded
-        page inside the operator console.
+        Search, type, status, priority, sorting, and pagination all query the backend worklist API.
       </p>
     </div>
   );
@@ -457,7 +456,7 @@ function WorkQueueTable(props: {
             {items.map((item) => {
               const rowSelected = item.id === selectedId;
               const checked = selectedIds.includes(item.id);
-              const identity = [item.patient, item.payer].filter(Boolean).join(" · ");
+              const identity = item.subtitle || [item.patient, item.payer].filter(Boolean).join(" · ");
               const assigneeLabel = item.assignee.userName ?? item.assignee.teamLabel ?? "Unassigned";
 
               return (
@@ -475,7 +474,7 @@ function WorkQueueTable(props: {
                           ? "border-sky-300/30 bg-sky-300/15 text-sky-100"
                           : "border-white/10 bg-white/[0.03] text-transparent"
                       }`}
-                      aria-label={`Select ${item.claimId}`}
+                      aria-label={`Select ${item.title}`}
                     >
                       ✓
                     </button>
@@ -483,11 +482,11 @@ function WorkQueueTable(props: {
                   <td className="px-5 py-4 align-top">
                     <div className="space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-semibold text-white">{item.claimId}</span>
+                        <span className="font-semibold text-white">{item.title}</span>
                         <span className={`rounded-full px-2 py-1 text-xs ${getStatusClasses(item.status)}`}>{item.status}</span>
                       </div>
                       <div>
-                        <p className="text-slate-200">{item.recommendedAction.reason}</p>
+                        <p className="text-slate-200">{item.reason}</p>
                         <p className="mt-1 text-xs text-slate-500">{identity || item.payer}</p>
                       </div>
                     </div>
@@ -530,13 +529,13 @@ function ClaimDrawer({ item }: { item: QueueItem | null }) {
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">Work item</p>
-            <h3 className="mt-1 text-xl font-semibold text-white">{item.claimId}</h3>
+            <h3 className="mt-1 text-xl font-semibold text-white">{item.title}</h3>
           </div>
           <span className={`rounded-full px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] ${getPriorityClasses(item.priority)}`}>
             {item.priority}
           </span>
         </div>
-        <p className="text-sm leading-6 text-slate-300">{item.recommendedAction.reason}</p>
+        <p className="text-sm leading-6 text-slate-300">{item.reason}</p>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
@@ -602,7 +601,7 @@ function DecisionSupportPanel({
             {item.agingBucket}
           </span>
         </div>
-        <p className="text-sm leading-6 text-slate-300">{item.recommendedAction.reason}</p>
+        <p className="text-sm leading-6 text-slate-300">{item.reason}</p>
       </div>
 
       <div className="space-y-3">
@@ -664,6 +663,7 @@ function DecisionSupportPanel({
 export function RevenueWorkbench({
   items,
   metrics,
+  typeOptions,
   totalItems,
   currentPage,
   pageSize,
@@ -676,6 +676,7 @@ export function RevenueWorkbench({
 }: {
   items: QueueItem[];
   metrics: InsightMetric[];
+  typeOptions: string[];
   totalItems: number;
   currentPage: number;
   pageSize: number;
@@ -705,38 +706,10 @@ export function RevenueWorkbench({
   );
   const activePage = Number.parseInt(searchParams.get("page") ?? String(currentPage), 10) || currentPage;
 
-  const typeOptions = useMemo(() => Array.from(new Set(items.map((item) => item.type))).sort(), [items]);
   const activeView = useMemo(
     () => getActiveViewLabel({ typeFilter, priorityFilter, statusFilter, searchText }),
     [priorityFilter, searchText, statusFilter, typeFilter],
   );
-
-  const filteredItems = useMemo(() => {
-    const normalizedSearch = searchText.trim().toLowerCase();
-
-    return items.filter((item) => {
-      const typeMatch = typeFilter === ALL_TYPES || item.type === typeFilter;
-      const searchMatch =
-        normalizedSearch.length === 0 ||
-        [
-          item.claimId,
-          item.patient ?? "",
-          item.patientId ?? "",
-          item.payer,
-          item.type,
-          item.status,
-          item.recommendedAction.reason,
-          item.assignee.userName ?? "",
-          item.assignee.teamLabel ?? "",
-          item.reasonCodes.join(" "),
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(normalizedSearch);
-
-      return typeMatch && searchMatch;
-    });
-  }, [items, searchText, typeFilter]);
 
   const updateQuery = useCallback(
     (updates: Record<string, string | null>) => {
@@ -778,17 +751,17 @@ export function RevenueWorkbench({
   );
 
   useEffect(() => {
-    const nextSelectedId = filteredItems[0]?.id ?? null;
-    if (filteredItems.length === 0) {
+    const nextSelectedId = items[0]?.id ?? null;
+    if (items.length === 0) {
       if (selectedId) {
         updateQuery({ selected: null });
       }
       return;
     }
-    if (!selectedId || !filteredItems.some((item) => item.id === selectedId)) {
+    if (!selectedId || !items.some((item) => item.id === selectedId)) {
       updateQuery({ selected: nextSelectedId });
     }
-  }, [filteredItems, selectedId, updateQuery]);
+  }, [items, selectedId, updateQuery]);
 
   useEffect(() => {
     if (!bulkFeedback) {
@@ -798,8 +771,8 @@ export function RevenueWorkbench({
     return () => window.clearTimeout(timeout);
   }, [bulkFeedback]);
 
-  const selectedItem = filteredItems.find((item) => item.id === selectedId) ?? filteredItems[0] ?? null;
-  const hiddenSelectedCount = selectedIds.filter((id) => !filteredItems.some((item) => item.id === id)).length;
+  const selectedItem = items.find((item) => item.id === selectedId) ?? items[0] ?? null;
+  const hiddenSelectedCount = selectedIds.filter((id) => !items.some((item) => item.id === id)).length;
 
   async function handleMarkInProgress(itemIds: string[]) {
     if (itemIds.length === 0 || isSubmitting) {
@@ -832,7 +805,7 @@ export function RevenueWorkbench({
   }
 
   function toggleSelectVisible() {
-    const visibleIds = filteredItems.map((item) => item.id);
+    const visibleIds = items.map((item) => item.id);
     const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
     setSelectedIds((current) =>
       allVisibleSelected ? current.filter((id) => !visibleIds.includes(id)) : Array.from(new Set([...current, ...visibleIds])),
@@ -922,13 +895,13 @@ export function RevenueWorkbench({
         totalPages={Math.max(totalPages, 1)}
         totalItems={totalItems}
         pageSize={pageSize}
-        visibleCount={filteredItems.length}
+        visibleCount={items.length}
         onPageChange={changePage}
       />
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)_minmax(320px,0.9fr)]">
         <WorkQueueTable
-          items={filteredItems}
+          items={items}
           selectedId={selectedItem?.id ?? null}
           selectedIds={selectedIds}
           onSelect={(item) => updateQuery({ selected: item.id })}

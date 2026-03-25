@@ -25,6 +25,9 @@ export type WorklistAction = {
 
 export type QueueItem = {
   id: string;
+  title: string;
+  reason: string;
+  subtitle: string | null;
   claimId: string;
   claimRecordId: string | null;
   patient: string | null;
@@ -91,6 +94,9 @@ function itemLabel(item: RevenueWorklistItem): string {
 export function buildRevenueQueueItems(worklist: RevenueWorklistPage): QueueItem[] {
   return worklist.items.map((item) => ({
     id: item.id,
+    title: item.title,
+    reason: item.reason,
+    subtitle: item.subtitle ?? null,
     claimId: itemLabel(item),
     claimRecordId: item.claim_id ?? null,
     patient: item.patient_name ?? null,
@@ -130,9 +136,9 @@ export function buildInsightMetrics(
 ): InsightMetric[] {
   const criticalCount = worklist.summary.priority_counts.critical ?? 0;
   const highCount = worklist.summary.priority_counts.high ?? 0;
-  const needsReviewCount = worklist.items.filter((item) => item.status === "needs_review").length;
-  const preSubmissionCount = worklist.items.filter((item) => item.type === "PRE_SUBMISSION_GAP").length;
-  const totalAtRiskCents = worklist.items.reduce((total, item) => total + item.amount_at_risk_cents, 0);
+  const needsReviewCount = worklist.summary.needs_review_count ?? 0;
+  const preSubmissionCount = worklist.summary.type_counts.PRE_SUBMISSION_GAP ?? 0;
+  const totalAtRiskCents = worklist.summary.total_amount_at_risk_cents ?? 0;
 
   return [
     {

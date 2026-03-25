@@ -29,6 +29,9 @@ const worklistItemSchema = z.object({
   id: z.string().min(1),
   type: z.string().min(1),
   status: z.string().min(1),
+  title: z.string().min(1),
+  reason: z.string().min(1),
+  subtitle: z.string().nullable().optional(),
   claim_id: z.string().nullable().optional(),
   claim_ref: z.string().nullable().optional(),
   patient_id: z.string().nullable().optional(),
@@ -54,6 +57,10 @@ const worklistItemSchema = z.object({
 const worklistSummarySchema = z.object({
   total: z.number(),
   priority_counts: z.record(z.string(), z.number()),
+  status_counts: z.record(z.string(), z.number()).default({}),
+  type_counts: z.record(z.string(), z.number()).default({}),
+  needs_review_count: z.number().default(0),
+  total_amount_at_risk_cents: z.number().default(0),
 });
 
 export const revenueWorklistPageSchema = z.object({
