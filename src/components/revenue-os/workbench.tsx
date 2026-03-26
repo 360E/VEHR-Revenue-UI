@@ -27,6 +27,7 @@ const SORT_OPTIONS = [
 
 type SortValue = (typeof SORT_OPTIONS)[number]["value"];
 type SortDirection = "asc" | "desc";
+type CueTone = "neutral" | "urgent" | "impact" | "escalation";
 
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
@@ -68,6 +69,42 @@ function getStatusClasses(status: QueueStatus): string {
     case "open":
     default:
       return "bg-amber-400/10 text-amber-200";
+  }
+}
+
+function getEscalationClasses(value: string): string {
+  switch (value) {
+    case "escalated":
+      return "border-rose-400/25 bg-rose-400/[0.10] text-rose-100";
+    case "watch":
+      return "border-amber-400/25 bg-amber-400/[0.10] text-amber-100";
+    default:
+      return "border-emerald-400/25 bg-emerald-400/[0.10] text-emerald-100";
+  }
+}
+
+function getConfidenceClasses(confidence: string): string {
+  switch (confidence.toLowerCase()) {
+    case "high":
+      return "border-emerald-400/25 bg-emerald-400/[0.10] text-emerald-100";
+    case "medium":
+      return "border-amber-400/25 bg-amber-400/[0.10] text-amber-100";
+    default:
+      return "border-slate-400/25 bg-slate-400/[0.10] text-slate-200";
+  }
+}
+
+function cueToneClasses(tone: CueTone): string {
+  switch (tone) {
+    case "urgent":
+      return "border-amber-400/20 bg-amber-400/[0.08] text-amber-100";
+    case "impact":
+      return "border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-100";
+    case "escalation":
+      return "border-rose-400/20 bg-rose-400/[0.08] text-rose-100";
+    case "neutral":
+    default:
+      return "border-white/10 bg-white/[0.05] text-slate-200";
   }
 }
 
@@ -118,29 +155,85 @@ function normalizeSortDirection(value: string | null | undefined, fallback: Sort
   return value === "asc" || value === "desc" ? value : fallback;
 }
 
-function InsightStrip({
-  metrics,
+function CommandDeck({
+  totalItems,
+  currentPage,
+  totalPages,
+  snapshotNotice,
 }: {
-  metrics: InsightMetric[];
+  totalItems: number;
+  currentPage: number;
+  totalPages: number;
+  snapshotNotice?: string | null;
 }) {
+  return (
+    <section className="overflow-hidden rounded-[30px] border border-white/8 bg-[linear-gradient(135deg,rgba(18,22,31,0.98),rgba(11,14,21,0.98))] shadow-[0_30px_80px_rgba(0,0,0,0.35)]">
+      <div className="border-b border-white/8 px-5 py-4 lg:px-7">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-3xl space-y-2">
+            <p className="text-[11px] uppercase tracking-[0.34em] text-sky-200/70">Revenue OS Command Deck</p>
+            <div className="space-y-1">
+              <h2 className="text-[1.85rem] font-semibold tracking-[-0.06em] text-white lg:text-[2.65rem]">
+                Work the queue with less guesswork.
+              </h2>
+              <p className="max-w-2xl text-sm leading-5.5 text-slate-300">
+                Triage what matters, understand why it matters, and move the next safe step using the backend-owned
+                workflow contract.
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-[20px] border border-white/8 bg-white/[0.03] px-4 py-3">
+              <p className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Queue volume</p>
+              <p className="mt-1.5 text-xl font-semibold tracking-[-0.04em] text-white">{totalItems}</p>
+              <p className="mt-1 text-xs text-slate-400">Canonical backend work items</p>
+            </div>
+            <div className="rounded-[20px] border border-white/8 bg-white/[0.03] px-4 py-3">
+              <p className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Current page</p>
+              <p className="mt-1.5 text-xl font-semibold tracking-[-0.04em] text-white">
+                {currentPage}/{Math.max(totalPages, 1)}
+              </p>
+              <p className="mt-1 text-xs text-slate-400">Server-paginated queue view</p>
+            </div>
+            <div className="rounded-[20px] border border-white/8 bg-white/[0.03] px-4 py-3">
+              <p className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Operator mode</p>
+              <p className="mt-1.5 text-base font-semibold tracking-[-0.04em] text-white">Decision support</p>
+              <p className="mt-1 text-xs text-slate-400">Recommendation cues stay backend explained</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      {snapshotNotice ? (
+        <div className="px-5 py-3 lg:px-7">
+          <div className="rounded-[18px] border border-amber-400/20 bg-amber-400/[0.08] px-4 py-2.5 text-sm leading-6 text-amber-100">
+            {snapshotNotice}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function InsightStrip({ metrics }: { metrics: InsightMetric[] }) {
   return (
     <div className="grid gap-4 xl:grid-cols-4">
       {metrics.map((metric) => (
         <div
           key={metric.label}
-          className="rounded-[22px] border border-white/8 bg-white/[0.035] p-4 text-left backdrop-blur-sm"
+          className="relative overflow-hidden rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,24,34,0.94),rgba(13,16,24,0.98))] p-3.5"
         >
-          <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">{metric.label}</p>
-          <div className="mt-4 flex items-end justify-between gap-3">
-            <div>
-              <p className="text-[2rem] font-semibold tracking-[-0.04em] text-white">{metric.value}</p>
-              <p className="mt-2 text-sm text-slate-300">{metric.trend}</p>
+          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-sky-300/30 to-transparent" />
+          <p className="text-[11px] uppercase tracking-[0.3em] text-slate-500">{metric.label}</p>
+          <div className="mt-4 flex items-start justify-between gap-3">
+            <div className="space-y-2">
+              <p className="text-[1.75rem] font-semibold tracking-[-0.05em] text-white">{metric.value}</p>
+              <p className="max-w-[18rem] text-sm leading-5 text-slate-300">{metric.trend}</p>
             </div>
             <span className="rounded-full border border-white/8 bg-white/[0.05] px-3 py-1 text-xs font-medium text-slate-300">
               {metric.change}
             </span>
           </div>
-          <p className="mt-4 text-sm text-sky-200/90">{metric.drillLabel}</p>
+          <p className="mt-4 text-sm font-medium text-sky-200/90">{metric.drillLabel}</p>
         </div>
       ))}
     </div>
@@ -183,7 +276,7 @@ function FilterBar(props: {
   } = props;
 
   return (
-    <div className="space-y-3 rounded-[22px] border border-white/8 bg-white/[0.03] p-4 backdrop-blur-sm">
+    <div className="space-y-2.5 rounded-[22px] border border-white/8 bg-white/[0.03] p-3 backdrop-blur-sm">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           {SAVED_VIEWS.map((view) => {
@@ -313,7 +406,7 @@ function BulkActionBar(props: {
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-[22px] border border-sky-400/20 bg-sky-400/[0.05] px-4 py-4 backdrop-blur-sm xl:flex-row xl:items-center xl:justify-between">
+    <div className="flex flex-col gap-3 rounded-[22px] border border-sky-400/20 bg-sky-400/[0.05] px-4 py-2.5 backdrop-blur-sm xl:flex-row xl:items-center xl:justify-between">
       <div className="space-y-1">
         <p className="text-sm font-semibold text-white">{selectedCount} work item{selectedCount === 1 ? "" : "s"} selected</p>
         <p className="text-sm text-slate-300">
@@ -359,7 +452,7 @@ function PaginationBar({
   onPageChange: (page: number) => void;
 }) {
   return (
-    <div className="flex flex-col gap-3 rounded-[22px] border border-white/8 bg-white/[0.03] px-4 py-4 backdrop-blur-sm xl:flex-row xl:items-center xl:justify-between">
+    <div className="flex flex-col gap-3 rounded-[22px] border border-white/8 bg-white/[0.03] px-4 py-2.5 backdrop-blur-sm xl:flex-row xl:items-center xl:justify-between">
       <div className="space-y-1 text-sm text-slate-300">
         <p className="font-medium text-white">
           Server page {currentPage} of {Math.max(totalPages, 1)}
@@ -391,7 +484,19 @@ function PaginationBar({
   );
 }
 
-function WorkQueueTable(props: {
+function QueueCuePill({
+  label,
+  tone = "neutral",
+}: {
+  label: string;
+  tone?: CueTone;
+}) {
+  return (
+    <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${cueToneClasses(tone)}`}>{label}</span>
+  );
+}
+
+function WorkQueuePanel(props: {
   items: QueueItem[];
   selectedId: string | null;
   selectedIds: string[];
@@ -404,11 +509,11 @@ function WorkQueueTable(props: {
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
 
   return (
-    <div className="overflow-hidden rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(18,22,30,0.96),rgba(14,17,24,0.98))] backdrop-blur-sm">
-      <div className="flex flex-col gap-4 border-b border-white/8 px-5 py-4 xl:flex-row xl:items-center xl:justify-between">
+    <div className="overflow-hidden rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(18,22,30,0.98),rgba(13,16,23,0.98))] backdrop-blur-sm">
+      <div className="flex flex-col gap-4 border-b border-white/8 px-5 py-5 xl:flex-row xl:items-center xl:justify-between">
         <div>
-          <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">Canonical work queue</p>
-          <h3 className="mt-1 text-lg font-semibold text-white">Backend-owned revenue workflow items</h3>
+          <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">Queue rail</p>
+          <h3 className="mt-1 text-lg font-semibold text-white">Scan urgency, impact, and next step at once</h3>
         </div>
         <div className="flex flex-wrap gap-2 text-sm">
           <button
@@ -421,151 +526,116 @@ function WorkQueueTable(props: {
         </div>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-left text-sm">
-          <thead className="bg-white/[0.025] text-[11px] uppercase tracking-[0.24em] text-slate-500">
-            <tr>
-              <th className="px-4 py-3">
-                <button
-                  type="button"
-                  onClick={onToggleSelectVisible}
-                  className="flex h-5 w-5 items-center justify-center rounded border border-white/10 bg-white/[0.03] text-[10px] text-slate-300"
-                  aria-label={allVisibleSelected ? "Clear visible selection" : "Select visible rows"}
-                >
-                  {allVisibleSelected ? "✓" : ""}
-                </button>
-              </th>
-              <th className="px-5 py-3">Work</th>
-              <th className="px-4 py-3">Type</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Priority</th>
-              <th className="px-4 py-3">SLA</th>
-              <th className="px-4 py-3">Amount at risk</th>
-              <th className="px-4 py-3">Aging</th>
-              <th className="px-4 py-3">Assignee</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/6">
-            {items.length === 0 ? (
-              <tr>
-                <td colSpan={9} className="px-5 py-10 text-center text-sm text-slate-400">
-                  No backend work items match the current filters.
-                </td>
-              </tr>
-            ) : null}
+      <div className="divide-y divide-white/6" aria-label="Canonical revenue work items">
+        {items.length === 0 ? (
+          <div className="px-5 py-12 text-center text-sm text-slate-400">No backend work items match the current filters.</div>
+        ) : null}
 
-            {items.map((item) => {
-              const rowSelected = item.id === selectedId;
-              const checked = selectedIds.includes(item.id);
-              const identity = item.subtitle || [item.patient, item.payer].filter(Boolean).join(" · ");
-              const assigneeLabel = item.assignee.userName ?? item.assignee.teamLabel ?? "Unassigned";
+        {items.map((item) => {
+          const rowSelected = item.id === selectedId;
+          const checked = selectedIds.includes(item.id);
+          const identity = item.subtitle || [item.patient, item.payer].filter(Boolean).join(" · ");
+          const assigneeLabel = item.assignee.userName ?? item.assignee.teamLabel ?? "Unassigned";
+          const leadUrgencyCue = item.recommendedAction.urgency_cues[0];
+          const leadImpactCue = item.recommendedAction.impact_cues[0];
+          const leadEscalationCue = item.recommendedAction.escalation_signals[0];
 
-              return (
-                <tr
-                  key={item.id}
-                  className={`cursor-pointer ${rowSelected ? "bg-white/[0.055]" : "hover:bg-white/[0.03]"}`}
-                  onClick={() => onSelect(item)}
-                >
-                  <td className="px-4 py-4 align-top" onClick={(event) => event.stopPropagation()}>
-                    <button
-                      type="button"
-                      onClick={() => onToggleSelect(item.id)}
-                      className={`flex h-5 w-5 items-center justify-center rounded border text-[10px] ${
-                        checked
-                          ? "border-sky-300/30 bg-sky-300/15 text-sky-100"
-                          : "border-white/10 bg-white/[0.03] text-transparent"
-                      }`}
-                      aria-label={`Select ${item.title}`}
-                    >
-                      ✓
-                    </button>
-                  </td>
-                  <td className="px-5 py-4 align-top">
-                    <div className="space-y-2">
+          return (
+            <div
+              key={item.id}
+              tabIndex={0}
+              onClick={() => onSelect(item)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelect(item);
+                }
+              }}
+              className={`px-5 py-5 outline-none transition focus-visible:ring-2 focus-visible:ring-sky-300/60 focus-visible:ring-inset ${
+                rowSelected
+                  ? "bg-[linear-gradient(90deg,rgba(56,189,248,0.12),rgba(255,255,255,0.02))] ring-1 ring-sky-300/35"
+                  : "hover:bg-white/[0.03]"
+              }`}
+            >
+              <div className="rounded-[22px] transition">
+                <div className="flex gap-4">
+                <div className="pt-1" onClick={(event) => event.stopPropagation()}>
+                  <button
+                    type="button"
+                    onClick={() => onToggleSelect(item.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.stopPropagation();
+                      }
+                    }}
+                    className={`flex h-5 w-5 items-center justify-center rounded border text-[10px] ${
+                      checked
+                        ? "border-sky-300/30 bg-sky-300/15 text-sky-100"
+                        : "border-white/10 bg-white/[0.03] text-transparent"
+                    }`}
+                    aria-label={`Select ${item.title}`}
+                  >
+                    ✓
+                  </button>
+                </div>
+
+                <div className="min-w-0 flex-1 space-y-4">
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="min-w-0 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-semibold text-white">{item.title}</span>
-                        <span className={`rounded-full px-2 py-1 text-xs ${getStatusClasses(item.status)}`}>{item.status}</span>
+                        <span className="truncate text-base font-semibold tracking-[-0.02em] text-white">{item.title}</span>
+                        <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.18em] ${getStatusClasses(item.status)}`}>
+                          {item.status.replace("_", " ")}
+                        </span>
+                        <span
+                          className={`rounded-full border px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.18em] ${getPriorityClasses(item.priority)}`}
+                        >
+                          {item.priority}
+                        </span>
+                        <span
+                          className={`rounded-full border px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.18em] ${getEscalationClasses(item.escalationState)}`}
+                        >
+                          {item.escalationState}
+                        </span>
                       </div>
-                      <div>
-                        <p className="text-slate-200">{item.reason}</p>
-                        <p className="mt-1 text-xs text-slate-500">{identity || item.payer}</p>
+                      <p className="max-w-3xl text-sm leading-6 text-slate-200">{item.reason}</p>
+                      <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{identity || item.payer}</p>
+                    </div>
+
+                    <div className="grid shrink-0 gap-2 rounded-[22px] border border-white/8 bg-black/20 px-4 py-3 text-sm xl:min-w-[250px]">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-500">At risk</span>
+                        <span className="font-semibold text-white">{formatMoney(item.amountAtRiskCents)}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-500">SLA</span>
+                        <span className="text-slate-200">{item.slaState}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-500">Aging</span>
+                        <span className="text-slate-200">{item.agingDays}d · {item.agingBucket}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-500">Assignee</span>
+                        <span className="truncate text-slate-200">{assigneeLabel}</span>
                       </div>
                     </div>
-                  </td>
-                  <td className="px-4 py-4 align-top text-slate-300">{item.type}</td>
-                  <td className="px-4 py-4 align-top text-slate-300">{item.status}</td>
-                  <td className="px-4 py-4 align-top">
-                    <span
-                      className={`rounded-full border px-2 py-1 text-xs font-medium uppercase tracking-[0.18em] ${getPriorityClasses(item.priority)}`}
-                    >
-                      {item.priority}
-                    </span>
-                  </td>
-                  <td className="px-4 py-4 align-top text-slate-300">{item.slaState}</td>
-                  <td className="px-4 py-4 align-top text-white">{formatMoney(item.amountAtRiskCents)}</td>
-                  <td className="px-4 py-4 align-top text-slate-300">{item.agingDays}d</td>
-                  <td className="px-4 py-4 align-top text-slate-300">{assigneeLabel}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
+                  </div>
 
-function ClaimDrawer({ item }: { item: QueueItem | null }) {
-  if (!item) {
-    return (
-      <div className="rounded-[24px] border border-dashed border-white/8 bg-white/[0.02] p-5 text-sm text-slate-400">
-        No work items match the current filters.
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-5 rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,24,33,0.96),rgba(15,18,25,0.98))] p-5 backdrop-blur-sm">
-      <div className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">Work item</p>
-            <h3 className="mt-1 text-xl font-semibold text-white">{item.title}</h3>
-          </div>
-          <span className={`rounded-full px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] ${getPriorityClasses(item.priority)}`}>
-            {item.priority}
-          </span>
-        </div>
-        <p className="text-sm leading-6 text-slate-300">{item.reason}</p>
-      </div>
-
-      <div className="grid gap-3 md:grid-cols-2">
-        {[
-          ["Type", item.type],
-          ["Status", item.status],
-          ["SLA", item.slaState],
-          ["Escalation", item.escalationState],
-          ["Patient", item.patient ?? "Unavailable"],
-          ["Payer", item.payer],
-          ["Facility", item.facility ?? "Unavailable"],
-          ["Assignee", item.assignee.userName ?? item.assignee.teamLabel ?? "Unassigned"],
-        ].map(([label, value]) => (
-          <div key={label} className="rounded-2xl border border-white/8 bg-black/20 p-3">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">{label}</p>
-            <p className="mt-2 break-words text-sm text-white">{value}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="rounded-2xl border border-white/8 bg-black/20 p-4">
-        <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Reason codes</p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {item.reasonCodes.map((code) => (
-            <span key={code} className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-xs text-slate-200">
-              {code}
-            </span>
-          ))}
-        </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <QueueCuePill label={item.recommendedAction.type} />
+                    <QueueCuePill label={item.type} />
+                    <QueueCuePill label={`SLA ${item.slaState}`} />
+                    {leadUrgencyCue ? <QueueCuePill label={leadUrgencyCue} tone="urgent" /> : null}
+                    {leadImpactCue ? <QueueCuePill label={leadImpactCue} tone="impact" /> : null}
+                    {leadEscalationCue ? <QueueCuePill label={leadEscalationCue} tone="escalation" /> : null}
+                  </div>
+                </div>
+              </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -584,25 +654,39 @@ function RecommendationCueGroup({
     return null;
   }
 
-  const classes =
-    tone === "urgent"
-      ? "border-amber-400/20 bg-amber-400/[0.06] text-amber-100"
-      : tone === "impact"
-        ? "border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-100"
-        : tone === "escalation"
-          ? "border-rose-400/20 bg-rose-400/[0.06] text-rose-100"
-          : "border-white/10 bg-white/[0.04] text-slate-200";
-
   return (
-    <div className="space-y-3">
-      <h5 className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">{title}</h5>
+    <div className="space-y-3 rounded-[22px] border border-white/8 bg-black/20 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <h5 className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">{title}</h5>
+        <span className="rounded-full border border-white/8 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-slate-500">
+          {items.length}
+        </span>
+      </div>
       <div className="flex flex-wrap gap-2">
         {items.map((entry) => (
-          <span key={`${title}-${entry}`} className={`rounded-2xl border px-3 py-2 text-xs ${classes}`}>
+          <span
+            key={`${title}-${entry}`}
+            className={`rounded-2xl border px-3 py-2 text-xs leading-5 ${cueToneClasses(tone)}`}
+          >
             {entry}
           </span>
         ))}
       </div>
+    </div>
+  );
+}
+
+function WorkflowFact({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-4">
+      <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">{label}</p>
+      <p className="mt-2 break-words text-sm leading-6 text-white">{value}</p>
     </div>
   );
 }
@@ -625,31 +709,83 @@ function DecisionSupportPanel({
   }
 
   const canMarkInProgress = item.allowedActions.includes("mark_in_progress");
+  const assigneeLabel = item.assignee.userName ?? item.assignee.teamLabel ?? "Unassigned";
+  const identity = item.subtitle || [item.patient, item.payer].filter(Boolean).join(" · ");
 
   return (
-    <div className="space-y-5 rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(22,26,34,0.96),rgba(16,19,26,0.98))] p-5 backdrop-blur-sm">
-      <div className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">Decision support</p>
-            <h3 className="mt-1 text-xl font-semibold text-white">Backend recommended next step</h3>
+    <div className="space-y-5 rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(22,26,34,0.98),rgba(15,18,25,0.99))] p-5 backdrop-blur-sm">
+      <div className="space-y-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">Operator inspector</p>
+              <h3 className="text-2xl font-semibold tracking-[-0.05em] text-white">{item.title}</h3>
+            </div>
+            <p className="max-w-3xl text-sm leading-6 text-slate-300">{item.reason}</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{identity || item.payer}</p>
           </div>
-          <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-slate-200">
-            {item.agingBucket}
-          </span>
+          <div className="flex flex-wrap gap-2">
+            <span className={`rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] ${getStatusClasses(item.status)}`}>
+              {item.status.replace("_", " ")}
+            </span>
+            <span
+              className={`rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] ${getPriorityClasses(item.priority)}`}
+            >
+              {item.priority}
+            </span>
+            <span
+              className={`rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] ${getEscalationClasses(item.escalationState)}`}
+            >
+              {item.escalationState}
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-slate-200">
+              {item.agingBucket}
+            </span>
+          </div>
         </div>
-        <p className="text-sm leading-6 text-slate-300">{item.reason}</p>
       </div>
 
-      <div className="space-y-3">
-        <h4 className="text-sm font-semibold text-white">Recommended action</h4>
-        <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white">
-          <p className="font-medium uppercase tracking-[0.16em] text-slate-400">{item.recommendedAction.type}</p>
-          <p className="mt-2">{item.recommendedAction.reason}</p>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <WorkflowFact label="Amount at risk" value={formatMoney(item.amountAtRiskCents)} />
+        <WorkflowFact label="Aging / SLA" value={`${item.agingDays}d · ${item.slaState}`} />
+        <WorkflowFact label="Assignee" value={assigneeLabel} />
+        <WorkflowFact label="Payer / facility" value={[item.payer, item.facility].filter(Boolean).join(" · ") || "Unavailable"} />
+      </div>
+
+      <div className="space-y-4 rounded-[24px] border border-sky-300/12 bg-sky-300/[0.05] p-5">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div className="space-y-2">
+            <p className="text-[11px] uppercase tracking-[0.24em] text-sky-200/70">Recommended next step</p>
+            <h4 className="text-lg font-semibold text-white">{item.recommendedAction.type}</h4>
+          </div>
+          <span
+            className={`rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] ${getConfidenceClasses(item.recommendedAction.confidence)}`}
+          >
+            {item.recommendedAction.confidence} confidence
+          </span>
+        </div>
+        <div className="space-y-3 text-sm text-white">
+          <p className="text-base leading-7 text-white">{item.recommendedAction.reason}</p>
           {item.recommendedAction.rationale ? (
-            <p className="mt-2 text-sm leading-6 text-slate-300">{item.recommendedAction.rationale}</p>
+            <p className="leading-6 text-slate-300">{item.recommendedAction.rationale}</p>
           ) : null}
-          <p className="mt-2 text-xs text-slate-400">Confidence: {item.recommendedAction.confidence}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {item.allowedActions.map((action) => (
+            <span key={action} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white">
+              {action}
+            </span>
+          ))}
+          {canMarkInProgress ? (
+            <button
+              type="button"
+              onClick={() => void onMarkInProgress([item.id])}
+              disabled={isSubmitting}
+              className="rounded-full border border-white/10 bg-white/[0.08] px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 hover:border-white/18 hover:bg-white/[0.12]"
+            >
+              {isSubmitting ? "Updating..." : "Mark in progress"}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -657,45 +793,46 @@ function DecisionSupportPanel({
       item.recommendedAction.urgency_cues.length > 0 ||
       item.recommendedAction.impact_cues.length > 0 ||
       item.recommendedAction.escalation_signals.length > 0 ? (
-        <div className="space-y-4 rounded-2xl border border-white/8 bg-black/20 p-4">
+        <div className="space-y-4">
           <div className="flex items-center justify-between gap-3">
-            <h4 className="text-sm font-semibold text-white">Recommendation detail</h4>
+            <h4 className="text-sm font-semibold text-white">Decision signals</h4>
             <span className="text-xs uppercase tracking-[0.18em] text-slate-500">Backend explained</span>
           </div>
-          <RecommendationCueGroup title="Decision drivers" items={item.recommendedAction.decision_drivers} />
-          <RecommendationCueGroup title="Urgency cues" items={item.recommendedAction.urgency_cues} tone="urgent" />
-          <RecommendationCueGroup title="Impact cues" items={item.recommendedAction.impact_cues} tone="impact" />
-          <RecommendationCueGroup
-            title="Escalation signals"
-            items={item.recommendedAction.escalation_signals}
-            tone="escalation"
-          />
+          <div className="grid gap-3 xl:grid-cols-2">
+            <RecommendationCueGroup title="Decision drivers" items={item.recommendedAction.decision_drivers} />
+            <RecommendationCueGroup title="Urgency cues" items={item.recommendedAction.urgency_cues} tone="urgent" />
+            <RecommendationCueGroup title="Impact cues" items={item.recommendedAction.impact_cues} tone="impact" />
+            <RecommendationCueGroup title="Escalation signals" items={item.recommendedAction.escalation_signals} tone="escalation" />
+          </div>
         </div>
       ) : null}
 
-      <div className="space-y-3">
+      <div className="space-y-3 rounded-[24px] border border-white/8 bg-black/20 p-4">
         <div className="flex items-center justify-between gap-3">
-          <h4 className="text-sm font-semibold text-white">Allowed actions</h4>
+          <h4 className="text-sm font-semibold text-white">Workflow context</h4>
           <span className="rounded-full border border-white/8 px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-400">
             Server enforced
           </span>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {item.allowedActions.map((action) => (
-            <span key={action} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white">
-              {action}
-            </span>
-          ))}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <WorkflowFact label="Type" value={item.type} />
+          <WorkflowFact label="Patient" value={item.patient ?? "Unavailable"} />
         </div>
-        {canMarkInProgress ? (
-          <button
-            type="button"
-            onClick={() => void onMarkInProgress([item.id])}
-            disabled={isSubmitting}
-            className="rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 hover:border-white/18 hover:bg-white/[0.09]"
-          >
-            {isSubmitting ? "Updating..." : "Mark in progress"}
-          </button>
+        <div className="space-y-3">
+          <h5 className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Reason codes</h5>
+          <div className="flex flex-wrap gap-2">
+            {item.reasonCodes.map((code) => (
+              <span key={code} className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-xs text-slate-200">
+                {code}
+              </span>
+            ))}
+          </div>
+        </div>
+        {!canMarkInProgress ? (
+          <div className="rounded-[18px] border border-amber-400/20 bg-amber-400/[0.08] px-4 py-3 text-sm leading-6 text-amber-100">
+            No direct action is available from this panel right now. Use the backend recommendation and workflow
+            context to guide the next operational step.
+          </div>
         ) : null}
       </div>
 
@@ -918,20 +1055,12 @@ export function RevenueWorkbench({
 
   return (
     <div className="space-y-6">
-      <div className="rounded-[22px] border border-white/8 bg-white/[0.03] p-4 backdrop-blur-sm">
-        <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">Worklist source</p>
-        <div className="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <p className="text-sm text-slate-200">Queue rows and summary cards are rendered directly from the backend worklist contract.</p>
-          <p className="text-sm text-slate-400">
-            Server page {activePage} of {Math.max(totalPages, 1)} · {totalItems} backend work item{totalItems === 1 ? "" : "s"} available.
-          </p>
-        </div>
-        {snapshotNotice ? (
-          <p className="mt-3 rounded-2xl border border-amber-500/20 bg-amber-500/[0.08] px-4 py-3 text-sm text-amber-100">
-            {snapshotNotice}
-          </p>
-        ) : null}
-      </div>
+      <CommandDeck
+        totalItems={totalItems}
+        currentPage={activePage}
+        totalPages={Math.max(totalPages, 1)}
+        snapshotNotice={snapshotNotice}
+      />
 
       <InsightStrip metrics={metrics} />
 
@@ -982,8 +1111,8 @@ export function RevenueWorkbench({
         onPageChange={changePage}
       />
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)_minmax(320px,0.9fr)]">
-        <WorkQueueTable
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.18fr)_minmax(420px,0.92fr)]">
+        <WorkQueuePanel
           items={items}
           selectedId={selectedItem?.id ?? null}
           selectedIds={selectedIds}
@@ -991,7 +1120,6 @@ export function RevenueWorkbench({
           onToggleSelect={toggleSelect}
           onToggleSelectVisible={toggleSelectVisible}
         />
-        <ClaimDrawer item={selectedItem} />
         <DecisionSupportPanel item={selectedItem} isSubmitting={isSubmitting} onMarkInProgress={handleMarkInProgress} />
       </div>
     </div>
