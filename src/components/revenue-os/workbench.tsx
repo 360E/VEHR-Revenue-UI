@@ -571,6 +571,42 @@ function ClaimDrawer({ item }: { item: QueueItem | null }) {
   );
 }
 
+function RecommendationCueGroup({
+  title,
+  items,
+  tone = "neutral",
+}: {
+  title: string;
+  items: string[];
+  tone?: "neutral" | "urgent" | "impact" | "escalation";
+}) {
+  if (items.length === 0) {
+    return null;
+  }
+
+  const classes =
+    tone === "urgent"
+      ? "border-amber-400/20 bg-amber-400/[0.06] text-amber-100"
+      : tone === "impact"
+        ? "border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-100"
+        : tone === "escalation"
+          ? "border-rose-400/20 bg-rose-400/[0.06] text-rose-100"
+          : "border-white/10 bg-white/[0.04] text-slate-200";
+
+  return (
+    <div className="space-y-3">
+      <h5 className="text-[11px] font-medium uppercase tracking-[0.22em] text-slate-500">{title}</h5>
+      <div className="flex flex-wrap gap-2">
+        {items.map((entry) => (
+          <span key={`${title}-${entry}`} className={`rounded-2xl border px-3 py-2 text-xs ${classes}`}>
+            {entry}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DecisionSupportPanel({
   item,
   isSubmitting,
@@ -610,9 +646,32 @@ function DecisionSupportPanel({
         <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white">
           <p className="font-medium uppercase tracking-[0.16em] text-slate-400">{item.recommendedAction.type}</p>
           <p className="mt-2">{item.recommendedAction.reason}</p>
+          {item.recommendedAction.rationale ? (
+            <p className="mt-2 text-sm leading-6 text-slate-300">{item.recommendedAction.rationale}</p>
+          ) : null}
           <p className="mt-2 text-xs text-slate-400">Confidence: {item.recommendedAction.confidence}</p>
         </div>
       </div>
+
+      {item.recommendedAction.decision_drivers.length > 0 ||
+      item.recommendedAction.urgency_cues.length > 0 ||
+      item.recommendedAction.impact_cues.length > 0 ||
+      item.recommendedAction.escalation_signals.length > 0 ? (
+        <div className="space-y-4 rounded-2xl border border-white/8 bg-black/20 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="text-sm font-semibold text-white">Recommendation detail</h4>
+            <span className="text-xs uppercase tracking-[0.18em] text-slate-500">Backend explained</span>
+          </div>
+          <RecommendationCueGroup title="Decision drivers" items={item.recommendedAction.decision_drivers} />
+          <RecommendationCueGroup title="Urgency cues" items={item.recommendedAction.urgency_cues} tone="urgent" />
+          <RecommendationCueGroup title="Impact cues" items={item.recommendedAction.impact_cues} tone="impact" />
+          <RecommendationCueGroup
+            title="Escalation signals"
+            items={item.recommendedAction.escalation_signals}
+            tone="escalation"
+          />
+        </div>
+      ) : null}
 
       <div className="space-y-3">
         <div className="flex items-center justify-between gap-3">

@@ -10,6 +10,11 @@ const worklistRecommendedActionSchema = z.object({
   type: z.string().min(1),
   confidence: z.string().min(1),
   reason: z.string().min(1),
+  rationale: z.string().nullable().optional(),
+  decision_drivers: z.array(z.string()).default([]),
+  urgency_cues: z.array(z.string()).default([]),
+  impact_cues: z.array(z.string()).default([]),
+  escalation_signals: z.array(z.string()).default([]),
 });
 
 const worklistTimelineEntrySchema = z.object({

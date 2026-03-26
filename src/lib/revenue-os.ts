@@ -20,6 +20,11 @@ export type WorklistAction = {
   type: string;
   confidence: string;
   reason: string;
+  rationale?: string | null;
+  decision_drivers: string[];
+  urgency_cues: string[];
+  impact_cues: string[];
+  escalation_signals: string[];
 };
 
 export type QueueItem = {
@@ -112,7 +117,16 @@ export function buildRevenueQueueItems(worklist: RevenueWorklistPage): QueueItem
     escalationState: item.escalation_state,
     createdAt: item.created_at,
     updatedAt: item.updated_at,
-    recommendedAction: item.recommended_action,
+    recommendedAction: {
+      type: item.recommended_action.type,
+      confidence: item.recommended_action.confidence,
+      reason: item.recommended_action.reason,
+      rationale: item.recommended_action.rationale ?? null,
+      decision_drivers: item.recommended_action.decision_drivers ?? [],
+      urgency_cues: item.recommended_action.urgency_cues ?? [],
+      impact_cues: item.recommended_action.impact_cues ?? [],
+      escalation_signals: item.recommended_action.escalation_signals ?? [],
+    },
     allowedActions: item.allowed_actions,
     reasonCodes: item.reason_codes,
     assignee: {
