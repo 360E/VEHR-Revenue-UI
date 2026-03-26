@@ -247,21 +247,21 @@ function renderDashboardState(
 function getSnapshotNotice(state: DashboardState, autoRetryCount: number): string | null {
   switch (state.status) {
     case "loading":
-      return "Revenue summary cards are still loading. The canonical backend worklist is already available below.";
+      return "The AI command snapshot is still loading. Queue rows and summary cards below already come from the canonical backend worklist.";
     case "pending":
       return autoRetryCount < state.retryPolicy.maxAttempts
-        ? `Revenue summary cards are still generating. Queue rows stay live from the backend worklist while the snapshot retries every ${formatRetryInterval(
+        ? `The AI command snapshot is still generating. Queue rows and summary cards stay live from the backend worklist while the snapshot retries every ${formatRetryInterval(
             state.retryPolicy.intervalMs,
           )}.`
-        : "Revenue summary cards are still generating. The queue remains live from the backend worklist while automatic snapshot retries stay paused.";
+        : "The AI command snapshot is still generating. Queue rows and summary cards remain live from the backend worklist while automatic snapshot retries stay paused.";
     case "recoverable":
-      return "Revenue summary cards are temporarily unavailable. The queue below is still the canonical backend worklist.";
+      return "The AI command snapshot is temporarily unavailable. The queue and summary cards below are still the canonical backend worklist.";
     case "backend_failure":
-      return "Revenue summary cards failed to load. The queue below is still driven by the backend worklist contract.";
+      return "The AI command snapshot failed to load. The queue and summary cards below are still driven by the backend worklist contract.";
     case "fatal":
-      return "Revenue summary cards returned an unexpected payload. The queue below is still rendered from the backend worklist.";
+      return "The AI command snapshot returned an unexpected payload. The queue and summary cards below are still rendered from the backend worklist.";
     case "unauthorized":
-      return "Refresh your session to recover the summary cards. The queue below remains sourced from the backend while your current access stays valid.";
+      return "Refresh your session to recover the AI command snapshot. The queue and summary cards below remain sourced from the backend while your current access stays valid.";
     case "ready":
       return null;
     default:
@@ -279,7 +279,14 @@ function getWorklistErrorState(error: unknown): {
   const normalized = message.trim() || "Unable to load the backend worklist.";
   const lower = normalized.toLowerCase();
 
-  if (lower.includes("session") || lower.includes("sign in") || lower.includes("unauthorized") || lower.includes("forbidden")) {
+  if (
+    lower.includes("session") ||
+    lower.includes("sign in") ||
+    lower.includes("unauthorized") ||
+    lower.includes("forbidden") ||
+    lower.includes("invalid token") ||
+    lower.includes("invalid_token")
+  ) {
     return {
       title: "Session expired",
       message: "Sign in again to restore access to the canonical backend worklist.",
@@ -363,7 +370,7 @@ export function DashboardContent() {
 
     return {
       items: buildRevenueQueueItems(worklistPage),
-      metrics: buildInsightMetrics(state.status === "ready" ? state.snapshot : null, worklistPage),
+      metrics: buildInsightMetrics(worklistPage),
       typeOptions: Object.keys(worklistPage.summary.type_counts ?? {}).sort(),
       totalItems: worklistPage.total,
       currentPage: worklistPage.page,
@@ -371,7 +378,6 @@ export function DashboardContent() {
       totalPages: worklistPage.total_pages,
       sortBy: worklistPage.sort_by,
       sortDirection: worklistPage.sort_direction,
-      snapshotGeneratedAt: state.status === "ready" ? state.snapshot.generated_at : null,
       snapshotNotice: getSnapshotNotice(state, autoRetryCount),
     };
   }, [autoRetryCount, state, worklistPage]);

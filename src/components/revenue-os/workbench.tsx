@@ -670,7 +670,6 @@ export function RevenueWorkbench({
   totalPages,
   sortBy,
   sortDirection,
-  snapshotGeneratedAt,
   snapshotNotice,
   onMarkInProgress,
 }: {
@@ -683,7 +682,6 @@ export function RevenueWorkbench({
   totalPages: number;
   sortBy: string;
   sortDirection: string;
-  snapshotGeneratedAt: string | null;
   snapshotNotice?: string | null;
   onMarkInProgress: (itemIds: string[]) => Promise<void>;
 }) {
@@ -834,11 +832,7 @@ export function RevenueWorkbench({
       <div className="rounded-[22px] border border-white/8 bg-white/[0.03] p-4 backdrop-blur-sm">
         <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">Worklist source</p>
         <div className="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <p className="text-sm text-slate-200">
-            {snapshotGeneratedAt
-              ? `Latest revenue snapshot generated ${formatTimestampLabel(snapshotGeneratedAt)}.`
-              : "Rendering directly from the backend worklist contract."}
-          </p>
+          <p className="text-sm text-slate-200">Queue rows and summary cards are rendered directly from the backend worklist contract.</p>
           <p className="text-sm text-slate-400">
             Server page {activePage} of {Math.max(totalPages, 1)} · {totalItems} backend work item{totalItems === 1 ? "" : "s"} available.
           </p>

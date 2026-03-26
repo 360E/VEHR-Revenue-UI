@@ -1,4 +1,3 @@
-import type { RevenueSnapshotResponse } from "@/lib/api/types";
 import type { RevenueWorklistItem, RevenueWorklistPage } from "@/lib/api/worklist";
 
 export type QueuePriority = "critical" | "high" | "medium" | "low";
@@ -130,30 +129,28 @@ export function buildRevenueQueueItems(worklist: RevenueWorklistPage): QueueItem
   }));
 }
 
-export function buildInsightMetrics(
-  snapshot: RevenueSnapshotResponse | null,
-  worklist: RevenueWorklistPage,
-): InsightMetric[] {
+export function buildInsightMetrics(worklist: RevenueWorklistPage): InsightMetric[] {
   const criticalCount = worklist.summary.priority_counts.critical ?? 0;
   const highCount = worklist.summary.priority_counts.high ?? 0;
+  const mediumCount = worklist.summary.priority_counts.medium ?? 0;
   const needsReviewCount = worklist.summary.needs_review_count ?? 0;
   const preSubmissionCount = worklist.summary.type_counts.PRE_SUBMISSION_GAP ?? 0;
   const totalAtRiskCents = worklist.summary.total_amount_at_risk_cents ?? 0;
 
   return [
     {
-      label: "Total exposure",
-      value: formatMoney(snapshot?.total_exposure_cents ?? totalAtRiskCents),
+      label: "Open exposure",
+      value: formatMoney(totalAtRiskCents),
       trend: `${worklist.total} server-generated work item${worklist.total === 1 ? "" : "s"} in the queue`,
       change: `${criticalCount} critical`,
       drillLabel: "Review canonical worklist",
     },
     {
-      label: "30-day recovery",
-      value: formatMoney(snapshot?.expected_recovery_30_day_cents ?? totalAtRiskCents),
-      trend: "Backend-generated queue sorted by operator impact",
-      change: `${highCount + criticalCount} high priority`,
-      drillLabel: "Inspect high-value recoveries",
+      label: "Priority watchlist",
+      value: String(highCount + criticalCount),
+      trend: "High and critical items from the canonical backend queue",
+      change: `${mediumCount} medium`,
+      drillLabel: "Inspect urgent work",
     },
     {
       label: "Needs review",
@@ -164,7 +161,7 @@ export function buildInsightMetrics(
     },
     {
       label: "Pre-submission gaps",
-      value: String(snapshot?.critical_pre_submission_count ?? preSubmissionCount),
+      value: String(preSubmissionCount),
       trend: "Workflow items surfaced before clean claim resolution",
       change: `${preSubmissionCount} queue item${preSubmissionCount === 1 ? "" : "s"}`,
       drillLabel: "Open workflow gaps",
