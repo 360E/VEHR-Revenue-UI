@@ -34,6 +34,12 @@ npm run build
 npm run start
 ```
 
+Runtime note
+
+- The Revenue OS approval/history proxy routes depend on a valid backend base URL configuration through `NEXT_PUBLIC_API_URL` or `BACKEND_INTERNAL_URL` (with legacy fallbacks still supported).
+- The proxy layer also depends on the `vehr_access_token` cookie being present so the UI can forward `Authorization: Bearer ...` to VEHR.
+- `npm run typecheck` is the supported typecheck path for this repo’s release checks.
+
 ## Route availability
 
 - The App Router lives under `src/app`.

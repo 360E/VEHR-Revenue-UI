@@ -2,8 +2,15 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import useSWR from "swr";
 
-import type { RevenueWorklistActionResponse } from "@/lib/api/worklist";
+import {
+  fetchRevenueWorklistHistory,
+  type RevenueWorklistActionResponse,
+  type RevenueWorklistApprovalActionResponse,
+  type RevenueWorklistHistoryEntry,
+  type RevenueWorklistPage,
+} from "@/lib/api/worklist";
 import {
   type InsightMetric,
   type QueueItem,
@@ -16,7 +23,7 @@ const ALL_PRIORITIES = "All priorities";
 const ALL_STATUSES = "All statuses";
 const DEFAULT_SORT_BY = "priority";
 const DEFAULT_SORT_DIRECTION = "desc";
-const SAVED_VIEWS = ["Critical priority", "Needs review", "Denials", "Unassigned"] as const;
+const SAVED_VIEWS = ["Critical priority", "Needs review", "Denials"] as const;
 const SORT_OPTIONS = [
   { value: "priority", label: "Priority" },
   { value: "updated_at", label: "Updated" },
@@ -42,6 +49,110 @@ function formatTimestampLabel(value: string | null | undefined): string {
     return value;
   }
   return parsed.toLocaleString();
+}
+
+function formatRelativeAgeLabel(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.valueOf())) {
+    return null;
+  }
+
+  const diffMs = Date.now() - parsed.valueOf();
+  const diffMinutes = Math.max(0, Math.floor(diffMs / 60000));
+
+  if (diffMinutes < 1) {
+    return "just now";
+  }
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m ago`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours}h ago`;
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+}
+
+function formatActionLabel(value: string | null | undefined): string {
+  if (!value) {
+    return "No action";
+  }
+  return value.replaceAll("_", " ");
+}
+
+function formatPolicyLabel(value: string | null | undefined): string {
+  if (!value) {
+    return "No policy";
+  }
+  return value.replaceAll("_", " ");
+}
+
+function getSupervisionClasses(state: string): string {
+  switch (state) {
+    case "approval_pending":
+      return "border-amber-400/20 bg-amber-400/[0.08] text-amber-100";
+    case "approval_rejected":
+      return "border-rose-400/20 bg-rose-400/[0.08] text-rose-100";
+    case "approval_approved_executed":
+      return "border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-100";
+    case "approval_approved_failed_closed":
+      return "border-amber-400/20 bg-amber-400/[0.08] text-amber-100";
+    case "candidate_no_request":
+      return "border-sky-400/20 bg-sky-400/[0.08] text-sky-100";
+    default:
+      return "border-white/8 bg-white/[0.04] text-slate-200";
+  }
+}
+
+function formatHistoryTitle(entry: RevenueWorklistHistoryEntry): string {
+  if (entry.entry_type === "approval") {
+    switch (entry.action_type) {
+      case "approval_requested":
+        return "Approval requested";
+      case "approval_approved":
+        return "Approval granted";
+      case "approval_rejected":
+        return "Approval rejected";
+      default:
+        return formatActionLabel(entry.action_type);
+    }
+  }
+  return formatActionLabel(entry.action_type);
+}
+
+function formatSupervisionTitle(state: string): string {
+  switch (state) {
+    case "candidate_no_request":
+      return "Candidate available";
+    case "approval_pending":
+      return "Approval pending";
+    case "approval_rejected":
+      return "Approval rejected";
+    case "approval_approved_executed":
+      return "Approved and executed";
+    case "approval_approved_failed_closed":
+      return "Approved but failed closed";
+    case "not_a_candidate":
+    default:
+      return "No automation candidate";
+  }
+}
+
+function isCrossPolicyPendingApprovalExplanation(value: string | null | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.toLowerCase();
+  return (
+    normalized.includes("must be resolved separately") &&
+    (normalized.includes("pending approval") || normalized.includes("different policy") || normalized.includes("another policy"))
+  );
 }
 
 function getPriorityClasses(priority: QueuePriority): string {
@@ -112,7 +223,6 @@ function getSavedViewState(view: string): {
   type?: string;
   priority?: string;
   status?: string;
-  search?: string;
 } {
   switch (view) {
     case "Critical priority":
@@ -121,8 +231,6 @@ function getSavedViewState(view: string): {
       return { status: "needs_review" };
     case "Denials":
       return { type: "DENIAL" };
-    case "Unassigned":
-      return { search: "unassigned" };
     default:
       return {};
   }
@@ -132,7 +240,6 @@ function getActiveViewLabel(state: {
   typeFilter: string;
   priorityFilter: string;
   statusFilter: string;
-  searchText: string;
 }) {
   return (
     SAVED_VIEWS.find((view) => {
@@ -140,8 +247,7 @@ function getActiveViewLabel(state: {
       return (
         (saved.type ?? ALL_TYPES) === state.typeFilter &&
         (saved.priority ?? ALL_PRIORITIES) === state.priorityFilter &&
-        (saved.status ?? ALL_STATUSES) === state.statusFilter &&
-        (saved.search ?? "") === state.searchText
+        (saved.status ?? ALL_STATUSES) === state.statusFilter
       );
     }) ?? null
   );
@@ -153,6 +259,20 @@ function normalizeSortValue(value: string | null | undefined, fallback: SortValu
 
 function normalizeSortDirection(value: string | null | undefined, fallback: SortDirection): SortDirection {
   return value === "asc" || value === "desc" ? value : fallback;
+}
+
+function formatProjectionHealthDetail(health: RevenueWorklistPage["projection_health"]): string {
+  const parts: string[] = [];
+  if (health.pending_refresh_event_count > 0) {
+    parts.push(`${health.pending_refresh_event_count} pending`);
+  }
+  if (health.retry_refresh_event_count > 0) {
+    parts.push(`${health.retry_refresh_event_count} retry`);
+  }
+  if (health.oldest_queued_refresh_event_at) {
+    parts.push(`oldest ${formatRelativeAgeLabel(health.oldest_queued_refresh_event_at) ?? formatTimestampLabel(health.oldest_queued_refresh_event_at)}`);
+  }
+  return parts.join(" · ");
 }
 
 function CommandDeck({
@@ -249,6 +369,7 @@ function FilterBar(props: {
   sortDirection: SortDirection;
   typeOptions: string[];
   activeView: string | null;
+  projectionHealth: RevenueWorklistPage["projection_health"];
   onTypeChange: (value: string) => void;
   onPriorityChange: (value: string) => void;
   onStatusChange: (value: string) => void;
@@ -266,6 +387,7 @@ function FilterBar(props: {
     sortDirection,
     typeOptions,
     activeView,
+    projectionHealth,
     onTypeChange,
     onPriorityChange,
     onStatusChange,
@@ -274,6 +396,8 @@ function FilterBar(props: {
     onSortDirectionChange,
     onApplySavedView,
   } = props;
+
+  const projectionHealthDetail = formatProjectionHealthDetail(projectionHealth);
 
   return (
     <div className="space-y-2.5 rounded-[22px] border border-white/8 bg-white/[0.03] p-3 backdrop-blur-sm">
@@ -297,7 +421,21 @@ function FilterBar(props: {
             );
           })}
         </div>
-        <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Server-generated workflow state</p>
+        <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.2em]">
+          <span className="text-slate-500">Server-generated workflow state</span>
+          <span
+            className={`rounded-full border px-2.5 py-1 text-[10px] tracking-[0.18em] ${
+              projectionHealth.projection_may_be_stale
+                ? "border-amber-400/20 bg-amber-400/[0.08] text-amber-100"
+                : "border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-100"
+            }`}
+          >
+            {projectionHealth.projection_may_be_stale ? "Projection may be stale" : "Projection fresh"}
+          </span>
+          {projectionHealthDetail ? (
+            <span className="text-slate-500 normal-case tracking-normal">{projectionHealthDetail}</span>
+          ) : null}
+        </div>
       </div>
 
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1.5fr)_repeat(5,minmax(150px,0.7fr))]">
@@ -386,7 +524,8 @@ function FilterBar(props: {
       </div>
 
       <p className="text-sm text-slate-400">
-        Search, type, status, priority, sorting, and pagination all query the backend worklist API.
+        Search, type, status, priority, sorting, and pagination all query the backend worklist API. Selection stays local
+        to the current page.
       </p>
     </div>
   );
@@ -528,7 +667,9 @@ function WorkQueuePanel(props: {
 
       <div className="divide-y divide-white/6" aria-label="Canonical revenue work items">
         {items.length === 0 ? (
-          <div className="px-5 py-12 text-center text-sm text-slate-400">No backend work items match the current filters.</div>
+          <div className="px-5 py-12 text-center text-sm text-slate-400">
+            No backend work items match the current filters or search query.
+          </div>
         ) : null}
 
         {items.map((item) => {
@@ -691,14 +832,250 @@ function WorkflowFact({
   );
 }
 
+function SupervisionPanel({
+  item,
+  history,
+  feedback,
+  isSubmitting,
+  onRequestApproval,
+  onApproveApproval,
+  onRejectApproval,
+}: {
+  item: QueueItem;
+  history: RevenueWorklistHistoryEntry[] | undefined;
+  feedback: { tone: "success" | "error"; message: string } | null;
+  isSubmitting: boolean;
+  onRequestApproval: (workItemId: string) => Promise<void>;
+  onApproveApproval: (workItemId: string) => Promise<void>;
+  onRejectApproval: (workItemId: string) => Promise<void>;
+}) {
+  const { supervision, shadowEvaluation } = item;
+  const canRequestApproval = supervision.state === "candidate_no_request";
+  const canApprove = supervision.state === "approval_pending";
+  const canReject = supervision.state === "approval_pending";
+  const requestedAt = formatTimestampLabel(supervision.requestedAt);
+  const decidedAt = formatTimestampLabel(supervision.decidedAt);
+  const candidateAction = supervision.candidateAction ?? shadowEvaluation.candidateAction;
+  const matchingHistory = (history ?? []).filter((entry) => entry.approval_request_id === supervision.approvalRequestId);
+  const requesterLabel =
+    matchingHistory.find((entry) => entry.action_type === "approval_requested")?.performed_by_user_name ??
+    (supervision.requestedByUserId ? `Operator ${supervision.requestedByUserId}` : "Recorded in backend history");
+  const decisionActorLabel =
+    matchingHistory.find((entry) => entry.action_type === "approval_approved" || entry.action_type === "approval_rejected")
+      ?.performed_by_user_name ??
+    (supervision.decidedByUserId ? `Operator ${supervision.decidedByUserId}` : "Recorded in backend history");
+  const approvalPolicyNames = Array.from(
+    new Set((history ?? []).filter((entry) => entry.entry_type === "approval").map((entry) => entry.policy_name).filter(Boolean)),
+  );
+  const showCrossPolicyCaution =
+    canRequestApproval &&
+    isCrossPolicyPendingApprovalExplanation(supervision.explanation) &&
+    approvalPolicyNames.some((policyName) => policyName !== supervision.policyName);
+
+  return (
+    <div className="space-y-4 rounded-[24px] border border-violet-300/12 bg-violet-300/[0.05] p-5">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div className="space-y-2">
+          <p className="text-[11px] uppercase tracking-[0.24em] text-violet-200/70">Automation supervision</p>
+          <h4 className="text-lg font-semibold text-white">{formatSupervisionTitle(supervision.state)}</h4>
+        </div>
+        <span
+          className={`rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] ${getSupervisionClasses(
+            supervision.state,
+          )}`}
+        >
+          {formatActionLabel(supervision.state)}
+        </span>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <WorkflowFact label="Policy" value={formatPolicyLabel(supervision.policyName)} />
+        <WorkflowFact label="Candidate action" value={formatActionLabel(candidateAction)} />
+        <WorkflowFact label="Shadow decision" value={shadowEvaluation.decision.replaceAll("_", " ")} />
+        <WorkflowFact label="Reason code" value={supervision.reasonCode.replaceAll("_", " ")} />
+      </div>
+
+      <div className="space-y-3 text-sm">
+        <p className="leading-6 text-slate-200">{supervision.explanation}</p>
+        {shadowEvaluation.explanation !== supervision.explanation ? (
+          <p className="leading-6 text-slate-400">Current candidate evaluation: {shadowEvaluation.explanation}</p>
+        ) : null}
+      </div>
+
+      {showCrossPolicyCaution ? (
+        <div className="rounded-[18px] border border-amber-400/20 bg-amber-400/[0.08] px-4 py-3 text-sm leading-6 text-amber-100">
+          Another policy&apos;s pending approval is still open. It must be resolved separately, and request or approval actions
+          for the current candidate may fail closed until that conflicting approval is handled.
+        </div>
+      ) : null}
+
+      {supervision.state === "approval_pending" ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <WorkflowFact label="Requested at" value={requestedAt} />
+          <WorkflowFact label="Requester" value={requesterLabel} />
+        </div>
+      ) : null}
+
+      {supervision.state === "approval_rejected" || supervision.state === "approval_approved_executed" || supervision.state === "approval_approved_failed_closed" ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <WorkflowFact label="Decision time" value={decidedAt} />
+          <WorkflowFact label="Decision actor" value={decisionActorLabel} />
+        </div>
+      ) : null}
+
+      {feedback ? (
+        <div
+          className={`rounded-[18px] px-4 py-3 text-sm leading-6 ${
+            feedback.tone === "success"
+              ? "border border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-100"
+              : "border border-rose-400/20 bg-rose-400/[0.08] text-rose-100"
+          }`}
+        >
+          {feedback.message}
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        {canRequestApproval ? (
+          <button
+            type="button"
+            onClick={() => void onRequestApproval(item.id)}
+            disabled={isSubmitting}
+            className="rounded-full border border-white/10 bg-white/[0.08] px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 hover:border-white/18 hover:bg-white/[0.12]"
+          >
+            {isSubmitting ? "Submitting..." : "Request approval"}
+          </button>
+        ) : null}
+        {canApprove ? (
+          <button
+            type="button"
+            onClick={() => void onApproveApproval(item.id)}
+            disabled={isSubmitting}
+            className="rounded-full border border-white/10 bg-white/[0.08] px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60 hover:border-white/18 hover:bg-white/[0.12]"
+          >
+            {isSubmitting ? "Submitting..." : "Approve and run"}
+          </button>
+        ) : null}
+        {canReject ? (
+          <button
+            type="button"
+            onClick={() => void onRejectApproval(item.id)}
+            disabled={isSubmitting}
+            className="rounded-full border border-white/8 px-4 py-2 text-sm text-slate-300 disabled:cursor-not-allowed disabled:opacity-60 hover:border-white/18 hover:text-white"
+          >
+            {isSubmitting ? "Submitting..." : "Reject approval"}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function AutomationHistoryPanel({
+  history,
+  isLoading,
+  error,
+}: {
+  history: RevenueWorklistHistoryEntry[] | undefined;
+  isLoading: boolean;
+  error: string | null;
+}) {
+  const approvalPolicyNames = Array.from(
+    new Set((history ?? []).filter((entry) => entry.entry_type === "approval").map((entry) => entry.policy_name).filter(Boolean)),
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-sm font-semibold text-white">Execution & approval history</h4>
+        <span className="text-sm text-slate-500">Canonical backend timeline</span>
+      </div>
+      {!isLoading && !error && approvalPolicyNames.length > 1 ? (
+        <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.08] p-4 text-sm leading-6 text-amber-100">
+          Approval history includes multiple policies for this work item: {approvalPolicyNames.map(formatPolicyLabel).join(", ")}.
+          Review the approval rows below to distinguish which policy each request or decision belongs to.
+        </div>
+      ) : null}
+      {isLoading ? (
+        <div className="rounded-2xl border border-white/8 bg-black/20 p-4 text-sm text-slate-400">Loading history…</div>
+      ) : error ? (
+        <div className="rounded-2xl border border-rose-400/20 bg-rose-400/[0.08] p-4 text-sm text-rose-100">
+          {error}
+        </div>
+      ) : history && history.length > 0 ? (
+        <div className="space-y-3">
+          {history.map((entry) => {
+            const actorLabel = entry.performed_by_user_name ?? (entry.entry_type === "approval" ? "Operator" : "System");
+            return (
+              <div key={entry.id} className="rounded-2xl border border-white/8 bg-black/20 p-3">
+                <div className="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-medium text-white">{formatHistoryTitle(entry)}</p>
+                      <span
+                        className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] ${
+                          entry.entry_type === "approval"
+                            ? "border-violet-300/15 bg-violet-300/[0.08] text-violet-100"
+                            : entry.performed_by_user_name === "System"
+                              ? "border-sky-300/15 bg-sky-300/[0.08] text-sky-100"
+                              : "border-white/8 bg-white/[0.04] text-slate-200"
+                        }`}
+                      >
+                        {entry.entry_type === "approval" ? "Approval" : "Action"}
+                      </span>
+                      {entry.policy_name ? (
+                        <span className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-slate-300">
+                          {formatPolicyLabel(entry.policy_name)}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-sm text-slate-300">{actorLabel}</p>
+                  </div>
+                  <div className="text-right text-xs text-slate-500">
+                    <p>{formatTimestampLabel(entry.created_at)}</p>
+                    {entry.status ? <p className="mt-1 uppercase tracking-[0.16em]">{formatActionLabel(entry.status)}</p> : null}
+                  </div>
+                </div>
+                {entry.error_message ? (
+                  <p className="mt-3 rounded-xl border border-rose-400/15 bg-rose-400/[0.08] px-3 py-2 text-sm text-rose-100">
+                    {entry.error_message}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-white/8 bg-black/20 p-4 text-sm text-slate-400">
+          No approval or execution history is available for this work item yet.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DecisionSupportPanel({
   item,
   isSubmitting,
   onMarkInProgress,
+  onRequestApproval,
+  onApproveApproval,
+  onRejectApproval,
+  history,
+  historyLoading,
+  historyError,
+  supervisionFeedback,
 }: {
   item: QueueItem | null;
   isSubmitting: boolean;
   onMarkInProgress: (itemIds: string[]) => Promise<RevenueWorklistActionResponse>;
+  onRequestApproval: (workItemId: string) => Promise<void>;
+  onApproveApproval: (workItemId: string) => Promise<void>;
+  onRejectApproval: (workItemId: string) => Promise<void>;
+  history: RevenueWorklistHistoryEntry[] | undefined;
+  historyLoading: boolean;
+  historyError: string | null;
+  supervisionFeedback: { itemId: string; tone: "success" | "error"; message: string } | null;
 }) {
   if (!item) {
     return (
@@ -709,6 +1086,9 @@ function DecisionSupportPanel({
   }
 
   const canMarkInProgress = item.allowedActions.includes("mark_in_progress");
+  const visibleAllowedActions = canMarkInProgress
+    ? item.allowedActions.filter((action) => action !== "mark_in_progress")
+    : item.allowedActions;
   const assigneeLabel = item.assignee.userName ?? item.assignee.teamLabel ?? "Unassigned";
   const identity = item.subtitle || [item.patient, item.payer].filter(Boolean).join(" · ");
 
@@ -770,12 +1150,22 @@ function DecisionSupportPanel({
             <p className="leading-6 text-slate-300">{item.recommendedAction.rationale}</p>
           ) : null}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {item.allowedActions.map((action) => (
-            <span key={action} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white">
-              {action}
-            </span>
-          ))}
+        <div className="space-y-2">
+          {visibleAllowedActions.length > 0 ? (
+            <div className="space-y-1.5">
+              <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">Backend-allowed actions</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {visibleAllowedActions.map((action) => (
+                  <span
+                    key={action}
+                    className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1 text-xs uppercase tracking-[0.16em] text-slate-300"
+                  >
+                    {action.replaceAll("_", " ")}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {canMarkInProgress ? (
             <button
               type="button"
@@ -788,6 +1178,16 @@ function DecisionSupportPanel({
           ) : null}
         </div>
       </div>
+
+      <SupervisionPanel
+        item={item}
+        history={history}
+        feedback={supervisionFeedback?.itemId === item.id ? supervisionFeedback : null}
+        isSubmitting={isSubmitting}
+        onRequestApproval={onRequestApproval}
+        onApproveApproval={onApproveApproval}
+        onRejectApproval={onRejectApproval}
+      />
 
       {item.recommendedAction.decision_drivers.length > 0 ||
       item.recommendedAction.urgency_cues.length > 0 ||
@@ -853,6 +1253,8 @@ function DecisionSupportPanel({
           ))}
         </div>
       </div>
+
+      <AutomationHistoryPanel history={history} isLoading={historyLoading} error={historyError} />
     </div>
   );
 }
@@ -867,8 +1269,12 @@ export function RevenueWorkbench({
   totalPages,
   sortBy,
   sortDirection,
+  projectionHealth,
   snapshotNotice,
   onMarkInProgress,
+  onRequestApproval,
+  onApproveApproval,
+  onRejectApproval,
 }: {
   items: QueueItem[];
   metrics: InsightMetric[];
@@ -879,14 +1285,23 @@ export function RevenueWorkbench({
   totalPages: number;
   sortBy: string;
   sortDirection: string;
+  projectionHealth: RevenueWorklistPage["projection_health"];
   snapshotNotice?: string | null;
   onMarkInProgress: (itemIds: string[]) => Promise<RevenueWorklistActionResponse>;
+  onRequestApproval: (workItemId: string) => Promise<RevenueWorklistApprovalActionResponse>;
+  onApproveApproval: (workItemId: string) => Promise<RevenueWorklistApprovalActionResponse>;
+  onRejectApproval: (workItemId: string) => Promise<RevenueWorklistApprovalActionResponse>;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkFeedback, setBulkFeedback] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+  const [supervisionFeedback, setSupervisionFeedback] = useState<{
+    itemId: string;
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const typeFilter = searchParams.get("type") ?? ALL_TYPES;
@@ -902,8 +1317,8 @@ export function RevenueWorkbench({
   const activePage = Number.parseInt(searchParams.get("page") ?? String(currentPage), 10) || currentPage;
 
   const activeView = useMemo(
-    () => getActiveViewLabel({ typeFilter, priorityFilter, statusFilter, searchText }),
-    [priorityFilter, searchText, statusFilter, typeFilter],
+    () => getActiveViewLabel({ typeFilter, priorityFilter, statusFilter }),
+    [priorityFilter, statusFilter, typeFilter],
   );
 
   const updateQuery = useCallback(
@@ -966,8 +1381,39 @@ export function RevenueWorkbench({
     return () => window.clearTimeout(timeout);
   }, [bulkFeedback]);
 
+  useEffect(() => {
+    if (!supervisionFeedback) {
+      return;
+    }
+    const timeout = window.setTimeout(() => setSupervisionFeedback(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [supervisionFeedback]);
+
   const selectedItem = items.find((item) => item.id === selectedId) ?? items[0] ?? null;
   const hiddenSelectedCount = selectedIds.filter((id) => !items.some((item) => item.id === id)).length;
+  const historyKey = selectedItem ? `revenue-work-item-history:${selectedItem.id}` : null;
+  const { data: history, error: historyFetchError, isLoading: historyLoading, mutate: mutateHistory } = useSWR(
+    historyKey,
+    () => fetchRevenueWorklistHistory(selectedItem!.id),
+    {
+      revalidateOnFocus: false,
+      shouldRetryOnError: false,
+    },
+  );
+  const historyErrorMessage =
+    historyFetchError instanceof Error && historyFetchError.message.trim()
+      ? historyFetchError.message
+      : historyFetchError
+        ? "Unable to load approval and execution history right now."
+        : null;
+
+  useEffect(() => {
+    if (!selectedItem) {
+      setSupervisionFeedback(null);
+      return;
+    }
+    setSupervisionFeedback((current) => (current && current.itemId !== selectedItem.id ? null : current));
+  }, [selectedItem]);
 
   async function handleMarkInProgress(itemIds: string[]) {
     if (itemIds.length === 0 || isSubmitting) {
@@ -1009,6 +1455,9 @@ export function RevenueWorkbench({
         response.results.filter((result) => result.status === "completed").map((result) => result.work_item_id),
       );
       setSelectedIds((current) => current.filter((id) => !successfulIds.has(id)));
+      if (selectedItem && itemIds.includes(selectedItem.id)) {
+        await mutateHistory();
+      }
       return response;
     } catch (error) {
       setBulkFeedback({
@@ -1019,6 +1468,44 @@ export function RevenueWorkbench({
             : "Unable to update the selected work items right now.",
       });
       throw error;
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleSupervisionAction(
+    workItemId: string,
+    label: "request" | "approve" | "reject",
+    action: (itemId: string) => Promise<RevenueWorklistApprovalActionResponse>,
+  ) {
+    if (isSubmitting) {
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      const response = await action(workItemId);
+      setSupervisionFeedback({
+        itemId: workItemId,
+        tone: "success",
+        message: response.executed
+          ? "Approval recorded and the backend executed the workflow action."
+          : label === "request"
+            ? "Approval request recorded."
+            : label === "approve"
+              ? "Approval recorded, but execution did not run because the item no longer qualified."
+              : "Approval request rejected.",
+      });
+      await mutateHistory();
+    } catch (error) {
+      setSupervisionFeedback({
+        itemId: workItemId,
+        tone: "error",
+        message:
+          error instanceof Error && error.message.trim()
+            ? error.message
+            : "Unable to update the automation supervision state right now.",
+      });
     } finally {
       setIsSubmitting(false);
     }
@@ -1042,7 +1529,6 @@ export function RevenueWorkbench({
       type: nextState.type ?? null,
       priority: nextState.priority ?? null,
       status: nextState.status ?? null,
-      search: nextState.search ?? null,
     });
   }
 
@@ -1073,6 +1559,7 @@ export function RevenueWorkbench({
         sortDirection={activeSortDirection}
         typeOptions={typeOptions}
         activeView={activeView}
+        projectionHealth={projectionHealth}
         onTypeChange={(value) => updateQuery({ type: value })}
         onPriorityChange={(value) => updateQuery({ priority: value })}
         onStatusChange={(value) => updateQuery({ status: value })}
@@ -1120,7 +1607,18 @@ export function RevenueWorkbench({
           onToggleSelect={toggleSelect}
           onToggleSelectVisible={toggleSelectVisible}
         />
-        <DecisionSupportPanel item={selectedItem} isSubmitting={isSubmitting} onMarkInProgress={handleMarkInProgress} />
+        <DecisionSupportPanel
+          item={selectedItem}
+          isSubmitting={isSubmitting}
+          onMarkInProgress={handleMarkInProgress}
+          onRequestApproval={(workItemId) => handleSupervisionAction(workItemId, "request", onRequestApproval)}
+          onApproveApproval={(workItemId) => handleSupervisionAction(workItemId, "approve", onApproveApproval)}
+          onRejectApproval={(workItemId) => handleSupervisionAction(workItemId, "reject", onRejectApproval)}
+          history={history}
+          historyLoading={historyLoading}
+          historyError={historyErrorMessage}
+          supervisionFeedback={supervisionFeedback}
+        />
       </div>
     </div>
   );

@@ -9,7 +9,13 @@ import useSWR from "swr";
 import { SectionCard } from "@/components/page-shell";
 import { RevenueWorkbench } from "@/components/revenue-os/workbench";
 import { fetchLatestRevenueSnapshotState, type DashboardState } from "@/lib/api/revenue";
-import { fetchRevenueWorklist, runRevenueWorklistAction } from "@/lib/api/worklist";
+import {
+  approveRevenueWorklistApproval,
+  fetchRevenueWorklist,
+  rejectRevenueWorklistApproval,
+  requestRevenueWorklistApproval,
+  runRevenueWorklistAction,
+} from "@/lib/api/worklist";
 import { buildInsightMetrics, buildRevenueQueueItems } from "@/lib/revenue-os";
 
 const WORKLIST_SORT_VALUES = new Set(["created_at", "updated_at", "aging", "priority", "amount_at_risk"]);
@@ -378,6 +384,7 @@ export function DashboardContent() {
       totalPages: worklistPage.total_pages,
       sortBy: worklistPage.sort_by,
       sortDirection: worklistPage.sort_direction,
+      projectionHealth: worklistPage.projection_health,
       snapshotNotice: getSnapshotNotice(state, autoRetryCount),
     };
   }, [autoRetryCount, state, worklistPage]);
@@ -435,5 +442,31 @@ export function DashboardContent() {
     return response;
   }
 
-  return <RevenueWorkbench {...workbenchData} onMarkInProgress={handleMarkInProgress} />;
+  async function handleRequestApproval(workItemId: string) {
+    const response = await requestRevenueWorklistApproval(workItemId);
+    await Promise.all([mutateWorklist(), mutateSnapshot()]);
+    return response;
+  }
+
+  async function handleApproveApproval(workItemId: string) {
+    const response = await approveRevenueWorklistApproval(workItemId);
+    await Promise.all([mutateWorklist(), mutateSnapshot()]);
+    return response;
+  }
+
+  async function handleRejectApproval(workItemId: string) {
+    const response = await rejectRevenueWorklistApproval(workItemId);
+    await Promise.all([mutateWorklist(), mutateSnapshot()]);
+    return response;
+  }
+
+  return (
+    <RevenueWorkbench
+      {...workbenchData}
+      onMarkInProgress={handleMarkInProgress}
+      onRequestApproval={handleRequestApproval}
+      onApproveApproval={handleApproveApproval}
+      onRejectApproval={handleRejectApproval}
+    />
+  );
 }

@@ -27,6 +27,28 @@ export type WorklistAction = {
   escalation_signals: string[];
 };
 
+export type WorklistShadowEvaluation = {
+  decision: string;
+  candidateAction: string | null;
+  reasonCode: string;
+  explanation: string;
+  policyName: string;
+};
+
+export type WorklistSupervision = {
+  state: string;
+  policyName: string;
+  candidateAction: string | null;
+  reasonCode: string;
+  explanation: string;
+  approvalRequestId: string | null;
+  requestedAt: string | null;
+  decidedAt: string | null;
+  requestedByUserId: string | null;
+  decidedByUserId: string | null;
+  executionAuditId: string | null;
+};
+
 export type QueueItem = {
   id: string;
   title: string;
@@ -49,6 +71,8 @@ export type QueueItem = {
   createdAt: string;
   updatedAt: string;
   recommendedAction: WorklistAction;
+  shadowEvaluation: WorklistShadowEvaluation;
+  supervision: WorklistSupervision;
   allowedActions: string[];
   reasonCodes: string[];
   assignee: WorklistAssignee;
@@ -126,6 +150,26 @@ export function buildRevenueQueueItems(worklist: RevenueWorklistPage): QueueItem
       urgency_cues: item.recommended_action.urgency_cues ?? [],
       impact_cues: item.recommended_action.impact_cues ?? [],
       escalation_signals: item.recommended_action.escalation_signals ?? [],
+    },
+    shadowEvaluation: {
+      decision: item.shadow_evaluation.decision,
+      candidateAction: item.shadow_evaluation.candidate_action ?? null,
+      reasonCode: item.shadow_evaluation.reason_code,
+      explanation: item.shadow_evaluation.explanation,
+      policyName: item.shadow_evaluation.policy_name,
+    },
+    supervision: {
+      state: item.supervision.state,
+      policyName: item.supervision.policy_name,
+      candidateAction: item.supervision.candidate_action ?? null,
+      reasonCode: item.supervision.reason_code,
+      explanation: item.supervision.explanation,
+      approvalRequestId: item.supervision.approval_request_id ?? null,
+      requestedAt: item.supervision.requested_at ?? null,
+      decidedAt: item.supervision.decided_at ?? null,
+      requestedByUserId: item.supervision.requested_by_user_id ?? null,
+      decidedByUserId: item.supervision.decided_by_user_id ?? null,
+      executionAuditId: item.supervision.execution_audit_id ?? null,
     },
     allowedActions: item.allowed_actions,
     reasonCodes: item.reason_codes,
